@@ -43,11 +43,19 @@ the fact. Commands bind to the gaze held at speech onset instead.
 pose and decays as the user settles into their chair — the likeliest way a
 working session stops working, and one nothing else would notice, because gaze
 keeps arriving and the clicks just land in the wrong tile. The dashboard shows
-live drift in pixels, measured with no ground truth: the mapping is asked for
-the current point, then again with the head-pose terms rewound to calibration,
-and the gap between the two answers is what rests on a pose the fit never saw.
-Say **"recalibrate"** or press **r** and five points buy the mapping back in
-about eight seconds rather than the twenty a full pass costs.
+how far the head has rotated from the calibration pose, in degrees. Say
+**"recalibrate"** or press **r** and five points buy the mapping back in about
+eight seconds rather than the twenty a full pass costs.
+
+Degrees rather than pixels, and measured from the head rather than through the
+mapping, both for the same reason: the appealing version does not work. Asking
+the mapping how much of its own prediction depends on head pose reports
+essentially zero, because a calibration collected sitting still gives it no
+pose signal to learn from — the ridge shrinks those columns away, and the real
+error lands in the eye ratios instead. On a real frame that version reported
+0 px for a head turn worth 151. Converting the honest measurement back into
+pixels would need the screen's physical width and the viewing distance, and
+the system knows neither, so it reports the angle it can actually defend.
 
 **Two safeguards.** The recogniser only arms when a face is visible, gaze is on
 screen, and the eyes are actually fixating, so someone else in the room saying
@@ -105,7 +113,11 @@ python -m seentap.run fit
 ```
 
 `calibrate` writes `logs/calib-9-<timestamp>.jsonl` — the feature vectors, the
-target coordinates, and your measured blink threshold. **This file is reused;
+target coordinates, your measured blink threshold and your rig's head-pose
+noise floor. The last two are measured rather than assumed because both vary
+enough between faces and cameras that a fixed constant misfires at both ends;
+calibration already holds you still on a target for a second, so the samples
+are there for free. **This file is reused;
 you do not recalibrate every session.** Mid-session drift is handled by
 requalification instead, which corrects the mapping in memory and leaves this
 file alone. `fit` then prints the accuracy table across three calibration
@@ -122,11 +134,15 @@ Open `127.0.0.1:8000`, look at a tile, say "click". Use the real filename —
 `--calibration` takes one path, so a `*` glob only works when exactly one file
 matches.
 
-Watch the **drift** badge. Amber is half the error the project accepts, red is
-all of it. Say **"recalibrate"** or press **r** to requalify: five targets, an
-affine correction fitted on top of the existing mapping, and the old mapping
-kept untouched if the new points do not clear the accuracy gate. The session
-keeps running throughout — gaze never stops streaming.
+Watch the **drift** badge — degrees of head rotation since you calibrated,
+amber at 2°, red at 5°. It reports the median of about a second, less the
+jitter your rig showed while you sat still during calibration: a single frame's
+head-pose estimate swings past 10° on a motionless head, so neither the
+smoothing nor the measured floor is optional. Say **"recalibrate"** or press
+**r** to requalify: five targets, an affine correction fitted on top of the
+existing mapping, and the old mapping kept untouched if the new points do not
+clear the accuracy gate. The session keeps running throughout — gaze never
+stops streaming.
 
 Actions land on a simulated desktop by default. `--real` injects genuine OS
 events and is meant for logged evaluation runs; during a demo a stray real
@@ -210,7 +226,7 @@ per-participant plots beside any p-value, no population-level claim.
 python -m pytest -q
 ```
 
-201 tests, none of which need a camera or a microphone.
+205 tests, none of which need a camera or a microphone.
 `tests/test_end_to_end.py` drives a synthetic participant through the whole
 pipeline — fusion, execution, logging, replay, the sweep and the CLI.
 `tests/test_requalify.py` drives a requalification through the same WebSocket
@@ -232,6 +248,9 @@ portrait and skips if you have not fetched one.
 * Five points buy an **affine** correction: offset, scale and shear, which is
   what pose drift mostly looks like. A large change of posture deforms the
   mapping in ways an affine cannot express, and still wants a full pass.
-* The **homography** mapping reads zero drift by construction. It consumes only
-  the eye ratios, so it has no pose term to rewind. Ridge and the quadratic
-  both do.
+* The drift badge sees **rotation only**. Leaning in or back rescales the
+  mapping without rotating anything — worth about 90 px in testing — and reads
+  as no drift at all. Requalification still fixes it; nothing prompts you to.
+* On a noisy rig the measured floor can reach 3°, which swallows a real 3° of
+  drift. The indicator degrades to catching only large movements rather than
+  reporting a number it cannot support.

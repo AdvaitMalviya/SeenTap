@@ -218,10 +218,10 @@ ws.onmessage = (ev) => {
     trail.push({x:m.x, y:m.y});
     if (trail.length > 45) trail.shift();
     const d = document.getElementById("drift");
-    d.textContent = m.drift == null ? "—" : Math.round(m.drift) + " px";
-    d.className = m.drift == null ? "" :
-      m.drift < cfg.drift_warn ? "drift-ok" :
-      m.drift < cfg.drift_bad ? "drift-warn" : "drift-bad";
+    d.textContent = m.drift_deg == null ? "—" : m.drift_deg.toFixed(1) + "°";
+    d.className = m.drift_deg == null ? "" :
+      m.drift_deg < cfg.drift_warn ? "drift-ok" :
+      m.drift_deg < cfg.drift_bad ? "drift-warn" : "drift-bad";
   } else if (m.kind === "state"){
     document.querySelector("#state b").textContent = m.state;
     document.getElementById("refusals").textContent = m.gate_refusals;

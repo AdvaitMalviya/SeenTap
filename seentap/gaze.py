@@ -7,6 +7,8 @@ imports it lazily, so nothing that only needs the maths pays for the model.
 from __future__ import annotations
 
 import math
+import statistics
+from collections import deque
 from dataclasses import dataclass
 
 import numpy as np
@@ -48,7 +50,7 @@ class GazeSample:
     conf: float
     zone: int | None = None
     blink: bool = False
-    drift: float | None = None
+    drift_deg: float | None = None
 
 
 def _xy(lm: np.ndarray, i: int) -> np.ndarray:
@@ -122,10 +124,8 @@ def head_pose(lm: np.ndarray, frame_w: int, frame_h: int) -> tuple[float, float,
     return float(yaw), float(pitch), float(roll)
 
 
-# Where head pose lives inside the feature vector: yaw, pitch, roll and the
-# interocular distance that stands in for depth. Everything drift_px does is
-# rewind these four.
-POSE = slice(4, 8)
+# Where head pose lives inside the feature vector.
+YAW, PITCH, IOD = 4, 5, 7
 
 
 def features(lm: np.ndarray, frame_w: int, frame_h: int) -> np.ndarray:
@@ -154,24 +154,49 @@ def features(lm: np.ndarray, frame_w: int, frame_h: int) -> np.ndarray:
                      interocular, 1.0], dtype=float)
 
 
-def drift_px(mapping, f: np.ndarray, f_ref: np.ndarray) -> float:
-    """How much of this estimate comes from having moved since calibrating.
+def pose_drift(f: np.ndarray, f_ref: np.ndarray) -> float:
+    """Degrees of head rotation since the calibration pose.
 
-    Ask the mapping for this frame's point, then again with the head-pose terms
-    rewound to where they sat during calibration. The gap between the two
-    answers is the part of the prediction that rests on a pose the fit never
-    saw. No ground truth is needed, which is the whole point: mid-session there
-    is none, and head drift is the likeliest way a working session stops
-    working.
+    This measures the *cause*, deliberately, and never consults the mapping.
+    The obvious version -- predict twice, once with the pose terms rewound, and
+    call the gap the drift -- reads zero almost always, because the mapping has
+    no pose coefficients to speak of: during calibration the user sits still
+    and head pose varies as noise uncorrelated with the target, so ridge shrinks
+    those columns to nothing. Real drift then lands in the eye ratios instead,
+    where the weight actually is, and rewinding pose sees none of it. Measured
+    on a real frame that mistake reported 0 px for a turn worth 151.
 
-    A homography reads zero here by construction -- it consumes only the eye
-    ratios, so it has no pose term to rewind and cannot express this error.
+    Reported in degrees rather than pixels because the honest conversion needs
+    the screen's physical width and the viewing distance, and the system knows
+    neither. Depth is not covered: leaning in rescales the mapping without
+    rotating anything.
     """
     f = np.asarray(f, dtype=float)
-    rewound = f.copy()
-    rewound[POSE] = np.asarray(f_ref, dtype=float)[POSE]
-    a, b = np.atleast_2d(mapping.predict(np.vstack([f, rewound])))
-    return float(math.hypot(a[0] - b[0], a[1] - b[1]))
+    ref = np.asarray(f_ref, dtype=float)
+    return float(math.degrees(math.hypot(f[YAW] - ref[YAW], f[PITCH] - ref[PITCH])))
+
+
+def drift_floor(F) -> float:
+    """What a motionless head still reads, measured at calibration.
+
+    solvePnP on a single frame is jittery: at half a pixel of landmark noise
+    this reports two degrees of rotation, and spikes past ten, on a head that
+    never moved. Within one calibration target the head *is* still for a
+    second, so every reading there is pure noise and the floor comes free --
+    the same bargain ``blink_threshold`` strikes, and for the same reason. A
+    fixed constant would misfire at both ends across cameras and faces.
+    """
+    F = np.asarray(F, dtype=float)
+    if len(F) < 2:
+        return 0.0
+    ref = np.median(F, axis=0)
+    return float(np.median([pose_drift(f, ref) for f in F]))
+
+
+def net_drift(measured: float, floor: float) -> float:
+    """Drift with the noise floor removed, in quadrature -- the movement and
+    the jitter are independent, so they add as squares, not linearly."""
+    return float(math.sqrt(max(0.0, measured ** 2 - floor ** 2)))
 
 
 class OneEuro:
@@ -284,6 +309,10 @@ class GazeTracker:
         # The head pose calibration was fitted at. Drift is measured against it,
         # and requalification replaces it. None until a calibration is loaded.
         self.f_ref = None if f_ref is None else np.asarray(f_ref, dtype=float)
+        # A single frame's pose is too jittery to show anyone; report the median
+        # of about a second, less whatever a motionless head reads on this rig.
+        self.drift_floor = 0.0
+        self._drift = deque(maxlen=config.DRIFT_MEDIAN_FRAMES)
         self.last_ear: float = 0.0
         self._last_valid: GazeSample | None = None
         self._blink_since: float | None = None
@@ -365,10 +394,28 @@ class GazeTracker:
         on_screen = 0 <= x <= sw and 0 <= y <= sh
         s = GazeSample(t=t, x=x, y=y, conf=1.0 if on_screen else 0.3,
                        zone=resolve_zone(x, y, sw, sh), blink=False,
-                       drift=None if self.f_ref is None
-                       else drift_px(self.mapping, f, self.f_ref))
+                       drift_deg=self._drift_deg(f))
         self._last_valid = s
         return s, frame
+
+    def _drift_deg(self, f) -> float | None:
+        if self.f_ref is None:
+            return None
+        self._drift.append(pose_drift(f, self.f_ref))
+        return net_drift(statistics.median(self._drift), self.drift_floor)
+
+    def rebase(self, f_ref, mapping=None) -> None:
+        """Adopt a corrected mapping and the pose it was measured at.
+
+        Everything downstream of the old pose has to go with it: the drift
+        window, or the indicator carries the old offset for a second, and the
+        smoother, or it drags pre-correction points into the new estimates.
+        """
+        if mapping is not None:
+            self.mapping = mapping
+        self.f_ref = np.asarray(f_ref, dtype=float)
+        self._drift.clear()
+        self.filter.reset()
 
     def close(self) -> None:
         if self.cap is not None:

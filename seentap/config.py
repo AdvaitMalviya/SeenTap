@@ -68,10 +68,15 @@ GATE_WINDOW_MS = 200      # dispersion is measured over this much history
 GATE_DISPERSION_PX = 120  # above this the eyes are sweeping, not fixating
 
 # --- drift and requalification ---------------------------------------------
-# Tied to the accuracy gate rather than invented: amber at half the error the
-# project is willing to accept, red at the whole of it.
-DRIFT_BAD_PX = GATE_FRAC * SCREEN_W
-DRIFT_WARN_PX = DRIFT_BAD_PX / 2
+# Degrees of head rotation away from the calibration pose. Pixels would be
+# dishonest: converting needs the screen's physical width and the viewing
+# distance, neither of which is known here. The arithmetic behind these two:
+# a ~300 mm wide screen at ~600 mm subtends about 28 degrees, so 2 degrees of
+# uncompensated head turn is roughly the 8% gate, and 5 is well past it. Both
+# assume a laptop at arm's length -- retune them for any other geometry.
+DRIFT_WARN_DEG = 2.0
+DRIFT_BAD_DEG = 5.0
+DRIFT_MEDIAN_FRAMES = 30  # ~1 s; a single frame's solvePnP is far too jittery
 REQUALIFY_POINTS = 5      # the smallest density; an affine wants three
 REQUALIFY_SETTLE_MS = 700
 REQUALIFY_COLLECT_MS = 900

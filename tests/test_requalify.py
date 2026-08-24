@@ -4,12 +4,13 @@ A calibration is fitted at one head pose and silently decays as the user
 settles into their chair. Nothing else in the system notices -- gaze keeps
 arriving, the gate keeps arming, the clicks just land in the wrong tile.
 
-Two halves here. ``drift_px`` puts a number on the decay without any ground
+Two halves here. ``pose_drift`` puts a number on the decay without any ground
 truth, and ``fit_correction`` buys the mapping back with five points instead of
 the twenty seconds a full recalibration costs.
 """
 import asyncio
 import json
+import math
 
 import numpy as np
 import pytest
@@ -30,6 +31,16 @@ class Plane:
                                 F[:, 2] * YG + F[:, 5] * PITCHG])
 
 
+class Blind:
+    """A mapping fitted from a still calibration: all weight on the eye ratios,
+    none on pose. This is what ridge actually produces, and why drift cannot be
+    measured through the mapping."""
+
+    def predict(self, F):
+        F = np.atleast_2d(np.asarray(F, dtype=float))
+        return np.column_stack([F[:, 0] * XG, F[:, 2] * YG])
+
+
 def look_at(x, y, yaw=0.0, pitch=0.0):
     """The feature vector of someone looking at (x, y) with that head pose."""
     return np.array([x / XG, x / XG, y / YG, y / YG, yaw, pitch, 0.0, 60.0, 1.0])
@@ -38,34 +49,79 @@ def look_at(x, y, yaw=0.0, pitch=0.0):
 # --- measuring drift -------------------------------------------------------
 
 def test_moving_the_eyes_is_not_drift():
-    """The whole point: only the pose terms count, or every saccade reads red."""
+    """The whole point: only the head counts, or every saccade reads red."""
     ref = look_at(756, 491)
-    assert gaze.drift_px(Plane(), look_at(120, 900), ref) == pytest.approx(0.0)
+    assert gaze.pose_drift(look_at(120, 900), ref) == pytest.approx(0.0)
 
 
-def test_moving_the_head_is_drift_and_is_reported_in_pixels():
+def test_turning_the_head_is_drift_and_is_reported_in_degrees():
     ref = look_at(756, 491)
-    d = gaze.drift_px(Plane(), look_at(756, 491, yaw=0.1), ref)
-    assert d == pytest.approx(0.1 * YAWG)          # 90 px of pure head rotation
+    turned = look_at(756, 491, yaw=math.radians(6))
+    assert gaze.pose_drift(turned, ref) == pytest.approx(6.0)
+
+
+def test_yaw_and_pitch_combine():
+    ref = look_at(756, 491)
+    both = look_at(756, 491, yaw=math.radians(3), pitch=math.radians(4))
+    assert gaze.pose_drift(both, ref) == pytest.approx(5.0)
 
 
 def test_drift_grows_with_the_movement():
     ref = look_at(756, 491)
-    small = gaze.drift_px(Plane(), look_at(756, 491, yaw=0.02), ref)
-    large = gaze.drift_px(Plane(), look_at(756, 491, yaw=0.2), ref)
+    small = gaze.pose_drift(look_at(756, 491, yaw=0.02), ref)
+    large = gaze.pose_drift(look_at(756, 491, yaw=0.2), ref)
     assert 0 < small < large
 
 
-def test_a_homography_cannot_see_drift_at_all():
-    """Documented limitation, not an oversight: the planar fit consumes only
-    the eye ratios, so it has no pose term to rewind."""
-    flat = calibrate._Homography(np.eye(3))
-    ref = look_at(756, 491)
-    assert gaze.drift_px(flat, look_at(756, 491, yaw=0.3), ref) == pytest.approx(0.0)
+def test_drift_does_not_go_through_the_mapping():
+    """The bug this replaced. Asking the mapping how much its own prediction
+    depends on pose reports nothing, because it has no pose coefficients to
+    speak of: calibration is collected sitting still, so pose varies as noise
+    uncorrelated with the target and the fit shrinks those columns away. The
+    error then lands in the eye ratios, where the weight is. Measured on a real
+    frame, the mapping-based version reported 0 px for a turn worth 151."""
+    blind = Blind()                       # a mapping that ignores pose entirely
+    turned = look_at(756, 491, yaw=math.radians(6))
+    moved_a_lot = blind.predict(look_at(900, 491).reshape(1, -1))[0]
+    assert not np.allclose(moved_a_lot, blind.predict(look_at(756, 491).reshape(1, -1))[0])
+    assert np.allclose(blind.predict(turned.reshape(1, -1)),
+                       blind.predict(look_at(756, 491).reshape(1, -1))), \
+        "this mapping cannot see pose at all"
+    assert gaze.pose_drift(turned, look_at(756, 491)) == pytest.approx(6.0)
 
 
 def test_a_sample_carries_no_drift_until_a_reference_pose_exists():
-    assert gaze.GazeSample(t=1.0, x=0.0, y=0.0, conf=1.0).drift is None
+    assert gaze.GazeSample(t=1.0, x=0.0, y=0.0, conf=1.0).drift_deg is None
+
+
+def test_a_motionless_head_still_reads_something_and_that_is_the_floor():
+    """solvePnP jitter, not movement. On a real frame at half a pixel of
+    landmark noise this reads two degrees and spikes past ten."""
+    rng = np.random.default_rng(0)
+    still = [look_at(756, 491, yaw=rng.normal(0, 0.02), pitch=rng.normal(0, 0.02))
+             for _ in range(40)]
+    floor = gaze.drift_floor(still)
+    assert 0.3 < floor < 3.0
+    assert gaze.drift_floor(still[:1]) == 0.0        # nothing to measure
+
+
+def test_the_floor_is_taken_out_in_quadrature():
+    """Jitter and movement are independent, so they add as squares."""
+    assert gaze.net_drift(5.0, 3.0) == pytest.approx(4.0)
+    assert gaze.net_drift(1.0, 3.0) == 0.0, "never report negative drift"
+    assert gaze.net_drift(6.0, 0.0) == pytest.approx(6.0)
+
+
+def test_the_reported_number_is_a_median_not_a_single_frame(monkeypatch):
+    """One spiking frame must not turn the badge red."""
+    tr = gaze.GazeTracker.__new__(gaze.GazeTracker)
+    tr.f_ref = look_at(756, 491)
+    tr.drift_floor = 0.0
+    tr._drift = __import__("collections").deque(maxlen=config.DRIFT_MEDIAN_FRAMES)
+    for _ in range(20):
+        tr._drift_deg(look_at(756, 491))
+    spiked = tr._drift_deg(look_at(756, 491, yaw=math.radians(40)))
+    assert spiked < 1.0, "a single wild frame is outvoted"
 
 
 # --- correcting it ---------------------------------------------------------
@@ -167,6 +223,14 @@ class FakeTracker:
         self.last_features = None
         self.f_ref = look_at(756, 491)
         self.filter = FakeFilter()
+        self.rebased = 0
+
+    def rebase(self, f_ref, mapping=None):
+        self.rebased += 1
+        if mapping is not None:
+            self.mapping = mapping
+        self.f_ref = np.asarray(f_ref, dtype=float)
+        self.filter.reset()
 
 
 class Participant:
@@ -226,11 +290,12 @@ def test_requalifying_walks_five_targets_and_swaps_the_mapping_in(tmp_path):
     assert user.phases("done")[0]["ok"] is True
 
     assert isinstance(tracker.mapping, calibrate._Corrected)
+    assert tracker.rebased == 1
     assert tracker.filter.resets == 1, "the smoother still holds pre-drift points"
     # The pose just measured becomes the new reference, so the indicator falls
     # back to zero instead of carrying the old offset forever.
-    assert gaze.drift_px(tracker.mapping, look_at(756, 491, yaw=0.09),
-                         tracker.f_ref) == pytest.approx(0.0, abs=1e-6)
+    assert gaze.pose_drift(look_at(756, 491, yaw=0.09),
+                           tracker.f_ref) == pytest.approx(0.0, abs=1e-9)
     assert any(r["kind"] == "requalify" and r["ok"] for r in eventlog.read(log))
 
 
@@ -295,12 +360,13 @@ def test_the_drift_number_reaches_the_dashboard_and_the_log(tmp_path):
         server.hub.clients.add(ws)
         rt = server.Runtime(log_path=log)
         await rt.on_gaze(gaze.GazeSample(t=eventlog.now(), x=700.0, y=500.0,
-                                         conf=0.9, zone=5, drift=83.5))
+                                         conf=0.9, zone=5, drift_deg=6.4))
         rt.close()
 
     asyncio.run(go())
-    assert [m for m in ws.sent if m["kind"] == "gaze"][0]["drift"] == 83.5
-    assert [r for r in eventlog.read(log) if r["kind"] == "gaze"][0]["drift"] == 83.5
+    assert [m for m in ws.sent if m["kind"] == "gaze"][0]["drift_deg"] == 6.4
+    assert [r for r in eventlog.read(log)
+            if r["kind"] == "gaze"][0]["drift_deg"] == 6.4
 
 
 def test_the_hotkey_runs_the_same_routine_the_spoken_verb_does(tmp_path):
@@ -336,8 +402,8 @@ def test_the_hotkey_runs_the_same_routine_the_spoken_verb_does(tmp_path):
 
     ws = asyncio.run(go())
     assert calls == [1], "junk must not kill the socket, and must not fire it"
-    assert ws.sent[0]["drift_warn"] == config.DRIFT_WARN_PX
-    assert ws.sent[0]["drift_bad"] == config.DRIFT_BAD_PX
+    assert ws.sent[0]["drift_warn"] == config.DRIFT_WARN_DEG
+    assert ws.sent[0]["drift_bad"] == config.DRIFT_BAD_DEG
 
 
 def test_the_dashboard_shows_targets_and_binds_the_hotkey():
@@ -349,6 +415,8 @@ def test_the_dashboard_shows_targets_and_binds_the_hotkey():
     assert "http://" not in html and "https://" not in html
 
 
-def test_the_drift_thresholds_are_the_accuracy_gate_not_magic_numbers():
-    assert config.DRIFT_BAD_PX == config.GATE_FRAC * config.SCREEN_W
-    assert config.DRIFT_WARN_PX == config.DRIFT_BAD_PX / 2
+def test_the_drift_thresholds_are_in_degrees_and_ordered():
+    """Degrees, not pixels: the honest conversion needs the screen's physical
+    width and the viewing distance, and the system knows neither."""
+    assert 0 < config.DRIFT_WARN_DEG < config.DRIFT_BAD_DEG
+    assert not hasattr(config, "DRIFT_WARN_PX")

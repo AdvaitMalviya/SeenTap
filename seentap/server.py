@@ -119,10 +119,10 @@ class Runtime:
         self.fusion.on_gaze(sample)
         self.log.write("gaze", t=sample.t, x=sample.x, y=sample.y,
                        conf=sample.conf, zone=sample.zone, blink=sample.blink,
-                       drift=sample.drift)
+                       drift_deg=sample.drift_deg)
         await hub.send({"kind": "gaze", "x": sample.x, "y": sample.y,
                         "zone": sample.zone, "conf": sample.conf,
-                        "drift": sample.drift})
+                        "drift_deg": sample.drift_deg})
         if self.condition == "C1":                    # gaze-only baseline
             picked = self.dwell.update(sample.zone, sample.t)
             if picked is not None:
@@ -211,11 +211,9 @@ class Runtime:
                 raise ValueError(f"only {len(F)} of {len(pts)} targets gave "
                                  f"usable gaze; keeping the old mapping")
             model, before, after = calibrate.fit_correction(tracker.mapping, F, XY)
-            tracker.mapping = model
             # The pose these points were collected at is the new reference, so
             # drift reads near zero again rather than carrying the old offset.
-            tracker.f_ref = np.median(np.asarray(F, dtype=float), axis=0)
-            tracker.filter.reset()
+            tracker.rebase(np.median(np.asarray(F, dtype=float), axis=0), model)
             out = {"ok": True, "reason": "", "n": len(F),
                    "before_px": before, "after_px": after}
         except ValueError as e:
@@ -272,7 +270,7 @@ async def socket(ws: WebSocket) -> None:
         "w": config.SCREEN_W, "h": config.SCREEN_H,
         "mode": runtime.mode if runtime else "B",
         "executor": type(runtime.executor).__name__ if runtime else "SimExecutor",
-        "drift_warn": config.DRIFT_WARN_PX, "drift_bad": config.DRIFT_BAD_PX,
+        "drift_warn": config.DRIFT_WARN_DEG, "drift_bad": config.DRIFT_BAD_DEG,
     }))
     try:
         while True:
