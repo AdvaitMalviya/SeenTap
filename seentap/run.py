@@ -76,7 +76,6 @@ def cmd_calibrate(args) -> int:  # pragma: no cover - needs a camera
     out = Path(args.out or f"{config.LOG_DIR}/calib-{args.density}-{int(time.time())}.jsonl")
     kept = 0
     open_ears = []
-    floors = []
     with eventlog.EventLog(out) as log:
         log.write("calibration", density=args.density, screen=[w, h])
         for (tx, ty) in pts:
@@ -99,12 +98,6 @@ def cmd_calibrate(args) -> int:  # pragma: no cover - needs a camera
                         if not blink:
                             open_ears.append(tr.last_ear)
                 if phase == "collect":
-                    # Within one target the head is still, so any drift read
-                    # here is jitter rather than movement.
-                    usable = [r["f"] for r in samples if not r["blink"]]
-                    if len(usable) > 1:
-                        from seentap.gaze import drift_floor
-                        floors.append(drift_floor(usable))
                     med = calibrate.condense(samples)
                     if med is None:
                         print(f"  target ({tx:.0f},{ty:.0f}): no usable samples")
@@ -119,10 +112,6 @@ def cmd_calibrate(args) -> int:  # pragma: no cover - needs a camera
         log.write("blink_threshold", value=thr, n=len(open_ears))
         print(f"blink threshold for this user: {thr:.3f} "
               f"(from {len(open_ears)} open-eye frames)")
-        floor = float(np.median(floors)) if floors else 0.0
-        log.write("drift_floor", value=floor, n=len(floors))
-        print(f"head-pose noise floor on this rig: {floor:.2f} deg "
-              f"(from {len(floors)} still targets)")
     tr.close()
     cv2.destroyAllWindows()
     print(f"{kept}/{len(pts)} targets captured -> {out}")
@@ -201,10 +190,6 @@ def cmd_serve(args) -> int:  # pragma: no cover - needs a camera and a mic
         if row.get("kind") == "blink_threshold":
             tracker.blink_ear = row["value"]
             print(f"blink threshold: {tracker.blink_ear:.3f} (from calibration)")
-        elif row.get("kind") == "drift_floor":
-            tracker.drift_floor = row["value"]
-            print(f"drift noise floor: {tracker.drift_floor:.2f} deg "
-                  f"(from calibration)")
 
     rt = server.Runtime(cfg, mode=args.mode, real=args.real,
                         condition=args.condition, tracker=tracker)

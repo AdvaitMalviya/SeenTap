@@ -154,49 +154,53 @@ def features(lm: np.ndarray, frame_w: int, frame_h: int) -> np.ndarray:
                      interocular, 1.0], dtype=float)
 
 
-def pose_drift(f: np.ndarray, f_ref: np.ndarray) -> float:
-    """Degrees of head rotation since the calibration pose.
+def pose_delta(f: np.ndarray, f_ref: np.ndarray) -> tuple[float, float, float]:
+    """Signed head movement since calibration: yaw, pitch, and distance ratio.
 
-    This measures the *cause*, deliberately, and never consults the mapping.
-    The obvious version -- predict twice, once with the pose terms rewound, and
-    call the gap the drift -- reads zero almost always, because the mapping has
-    no pose coefficients to speak of: during calibration the user sits still
-    and head pose varies as noise uncorrelated with the target, so ridge shrinks
-    those columns to nothing. Real drift then lands in the eye ratios instead,
-    where the weight actually is, and rewinding pose sees none of it. Measured
-    on a real frame that mistake reported 0 px for a turn worth 151.
+    Signed and kept apart on purpose. Collapsing to a magnitude per frame and
+    averaging afterwards rectifies the noise -- a magnitude is always positive,
+    so it never averages out, and on a motionless head it reads 2.9 degrees at
+    a pixel of landmark jitter. Average the components first and take the
+    magnitude once at the end and the same head reads 0.8.
 
-    Reported in degrees rather than pixels because the honest conversion needs
-    the screen's physical width and the viewing distance, and the system knows
-    neither. Depth is not covered: leaning in rescales the mapping without
-    rotating anything.
+    Interocular distance stands in for depth: it grows as the user leans in, so
+    the distance ratio is its inverse.
     """
     f = np.asarray(f, dtype=float)
     ref = np.asarray(f_ref, dtype=float)
-    return float(math.degrees(math.hypot(f[YAW] - ref[YAW], f[PITCH] - ref[PITCH])))
+    ratio = float(ref[IOD] / f[IOD]) if f[IOD] > 1e-9 else 1.0
+    return float(f[YAW] - ref[YAW]), float(f[PITCH] - ref[PITCH]), ratio
 
 
-def drift_floor(F) -> float:
-    """What a motionless head still reads, measured at calibration.
+def drift_degrees(dyaw: float, dpitch: float, distance_ratio: float = 1.0,
+                  half_tan: float = config.SCREEN_HALF_TAN) -> float:
+    """Rotation and depth as one gaze error, in degrees.
 
-    solvePnP on a single frame is jittery: at half a pixel of landmark noise
-    this reports two degrees of rotation, and spikes past ten, on a head that
-    never moved. Within one calibration target the head *is* still for a
-    second, so every reading there is pure noise and the floor comes free --
-    the same bargain ``blink_threshold`` strikes, and for the same reason. A
-    fixed constant would misfire at both ends across cameras and faces.
+    Leaning in rotates nothing, so a rotation-only measure reads zero through a
+    change worth ninety pixels. What it does instead is rescale the mapping
+    about the gaze axis, which makes the error proportional to how far off
+    centre you are looking -- worst at the screen edge, and that is the case
+    converted to an angle here. The two sources are independent, so they
+    combine in quadrature.
     """
-    F = np.asarray(F, dtype=float)
-    if len(F) < 2:
-        return 0.0
-    ref = np.median(F, axis=0)
-    return float(np.median([pose_drift(f, ref) for f in F]))
+    depth = math.atan(half_tan * abs(distance_ratio - 1.0))
+    return math.degrees(math.hypot(dyaw, dpitch, depth))
 
 
-def net_drift(measured: float, floor: float) -> float:
-    """Drift with the noise floor removed, in quadrature -- the movement and
-    the jitter are independent, so they add as squares, not linearly."""
-    return float(math.sqrt(max(0.0, measured ** 2 - floor ** 2)))
+def pose_drift(f: np.ndarray, f_ref: np.ndarray) -> float:
+    """One frame's drift in degrees, unsmoothed.
+
+    Never consults the mapping, deliberately. The appealing version -- predict
+    twice, once with the pose terms rewound, and call the gap the drift --
+    reads zero almost always: calibration is collected sitting still, so pose
+    varies as noise uncorrelated with the target and the fit shrinks those
+    columns away. Real drift lands in the eye ratios, where the weight is.
+    Measured on a real frame that mistake reported 0 px for a turn worth 151.
+
+    Degrees rather than pixels because the honest conversion needs the screen's
+    physical width and the viewing distance, and neither is known here.
+    """
+    return drift_degrees(*pose_delta(f, f_ref))
 
 
 class OneEuro:
@@ -309,9 +313,9 @@ class GazeTracker:
         # The head pose calibration was fitted at. Drift is measured against it,
         # and requalification replaces it. None until a calibration is loaded.
         self.f_ref = None if f_ref is None else np.asarray(f_ref, dtype=float)
-        # A single frame's pose is too jittery to show anyone; report the median
-        # of about a second, less whatever a motionless head reads on this rig.
-        self.drift_floor = 0.0
+        # A single frame's pose is far too jittery to show anyone: solvePnP
+        # swings past ten degrees on a motionless head. Report the median of
+        # about a second instead.
         self._drift = deque(maxlen=config.DRIFT_MEDIAN_FRAMES)
         self.last_ear: float = 0.0
         self._last_valid: GazeSample | None = None
@@ -401,8 +405,13 @@ class GazeTracker:
     def _drift_deg(self, f) -> float | None:
         if self.f_ref is None:
             return None
-        self._drift.append(pose_drift(f, self.f_ref))
-        return net_drift(statistics.median(self._drift), self.drift_floor)
+        self._drift.append(pose_delta(f, self.f_ref))
+        if self._frame_ms < config.DRIFT_WARMUP_FRAMES:
+            # The landmarker's tracker is still converging; its pose estimate
+            # swings degrees on a face that has not moved. Say nothing rather
+            # than send the dashboard a number that means nothing.
+            return None
+        return drift_degrees(*(statistics.median(c) for c in zip(*self._drift)))
 
     def rebase(self, f_ref, mapping=None) -> None:
         """Adopt a corrected mapping and the pose it was measured at.

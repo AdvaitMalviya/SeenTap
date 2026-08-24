@@ -11,6 +11,8 @@ the twenty seconds a full recalibration costs.
 import asyncio
 import json
 import math
+import statistics
+from collections import deque
 
 import numpy as np
 import pytest
@@ -41,9 +43,16 @@ class Blind:
         return np.column_stack([F[:, 0] * XG, F[:, 2] * YG])
 
 
-def look_at(x, y, yaw=0.0, pitch=0.0):
-    """The feature vector of someone looking at (x, y) with that head pose."""
-    return np.array([x / XG, x / XG, y / YG, y / YG, yaw, pitch, 0.0, 60.0, 1.0])
+IOD = 60.0            # interocular distance at the calibration distance
+
+
+def look_at(x, y, yaw=0.0, pitch=0.0, lean=1.0):
+    """The feature vector of someone looking at (x, y) with that head pose.
+
+    ``lean`` scales the interocular distance: above 1 the user has moved closer.
+    """
+    return np.array([x / XG, x / XG, y / YG, y / YG, yaw, pitch, 0.0,
+                     IOD * lean, 1.0])
 
 
 # --- measuring drift -------------------------------------------------------
@@ -94,30 +103,69 @@ def test_a_sample_carries_no_drift_until_a_reference_pose_exists():
     assert gaze.GazeSample(t=1.0, x=0.0, y=0.0, conf=1.0).drift_deg is None
 
 
-def test_a_motionless_head_still_reads_something_and_that_is_the_floor():
-    """solvePnP jitter, not movement. On a real frame at half a pixel of
-    landmark noise this reads two degrees and spikes past ten."""
+def test_leaning_in_is_drift_even_though_nothing_rotated():
+    """The rotation-only version read zero through a change worth 90 px.
+    Depth does not rotate anything; it rescales the mapping about the gaze
+    axis, so the error grows with how far off centre you are looking."""
+    ref = look_at(756, 491)
+    assert gaze.pose_drift(look_at(756, 491, lean=1.15), ref) > 1.5
+    assert gaze.pose_drift(look_at(756, 491, lean=0.87), ref) > 1.5
+
+
+def test_leaning_either_way_reads_as_drift():
+    ref = look_at(756, 491)
+    closer = gaze.pose_drift(look_at(756, 491, lean=1.2), ref)
+    further = gaze.pose_drift(look_at(756, 491, lean=0.8), ref)
+    assert closer > 0 and further > 0
+
+
+def test_sitting_where_you_calibrated_reads_nothing():
+    assert gaze.drift_degrees(0.0, 0.0, 1.0) == pytest.approx(0.0)
+
+
+def test_rotation_and_depth_combine_in_quadrature():
+    turn = gaze.drift_degrees(math.radians(3), 0.0, 1.0)
+    lean = gaze.drift_degrees(0.0, 0.0, 1.15)
+    both = gaze.drift_degrees(math.radians(3), 0.0, 1.15)
+    assert both == pytest.approx(math.hypot(turn, lean), abs=1e-9)
+
+
+def test_the_magnitude_is_taken_after_averaging_not_before():
+    """Why pose_delta hands back signed components. A magnitude is always
+    positive, so averaging it never removes the jitter -- measured on a real
+    frame, a motionless head read 2.9 degrees that way and 0.8 this way."""
     rng = np.random.default_rng(0)
-    still = [look_at(756, 491, yaw=rng.normal(0, 0.02), pitch=rng.normal(0, 0.02))
-             for _ in range(40)]
-    floor = gaze.drift_floor(still)
-    assert 0.3 < floor < 3.0
-    assert gaze.drift_floor(still[:1]) == 0.0        # nothing to measure
+    ref = look_at(756, 491)
+    noisy = [look_at(756, 491, yaw=rng.normal(0, 0.02), pitch=rng.normal(0, 0.02))
+             for _ in range(300)]
+    rectified_first = statistics.median([gaze.pose_drift(f, ref) for f in noisy])
+    deltas = [gaze.pose_delta(f, ref) for f in noisy]
+    averaged_first = gaze.drift_degrees(
+        *[statistics.median(c) for c in zip(*deltas)])
+    assert averaged_first < rectified_first / 3
 
 
-def test_the_floor_is_taken_out_in_quadrature():
-    """Jitter and movement are independent, so they add as squares."""
-    assert gaze.net_drift(5.0, 3.0) == pytest.approx(4.0)
-    assert gaze.net_drift(1.0, 3.0) == 0.0, "never report negative drift"
-    assert gaze.net_drift(6.0, 0.0) == pytest.approx(6.0)
-
-
-def test_the_reported_number_is_a_median_not_a_single_frame(monkeypatch):
-    """One spiking frame must not turn the badge red."""
+def _bare_tracker(frames_seen=10_000):
     tr = gaze.GazeTracker.__new__(gaze.GazeTracker)
     tr.f_ref = look_at(756, 491)
-    tr.drift_floor = 0.0
-    tr._drift = __import__("collections").deque(maxlen=config.DRIFT_MEDIAN_FRAMES)
+    tr._drift = deque(maxlen=config.DRIFT_MEDIAN_FRAMES)
+    tr._frame_ms = frames_seen
+    return tr
+
+
+def test_nothing_is_reported_until_the_landmarker_settles():
+    """Its tracking filter wanders 4.3 degrees on a face that never moved, and
+    takes about 130 frames to converge. A red badge at session start would send
+    the user off to requalify a calibration that is perfectly good."""
+    tr = _bare_tracker(frames_seen=1)
+    assert tr._drift_deg(look_at(756, 491)) is None
+    tr._frame_ms = config.DRIFT_WARMUP_FRAMES
+    assert tr._drift_deg(look_at(756, 491)) == pytest.approx(0.0)
+
+
+def test_the_reported_number_is_a_median_not_a_single_frame():
+    """One spiking frame must not turn the badge red."""
+    tr = _bare_tracker()
     for _ in range(20):
         tr._drift_deg(look_at(756, 491))
     spiked = tr._drift_deg(look_at(756, 491, yaw=math.radians(40)))

@@ -76,7 +76,18 @@ GATE_DISPERSION_PX = 120  # above this the eyes are sweeping, not fixating
 # assume a laptop at arm's length -- retune them for any other geometry.
 DRIFT_WARN_DEG = 2.0
 DRIFT_BAD_DEG = 5.0
+# Half the screen width in units of viewing distance -- the same 300 mm at
+# 600 mm assumed above, and the only geometry the system cannot measure for
+# itself. It converts a change of distance into the gaze error it causes at the
+# screen edge. Retune it for a desktop monitor or a different working distance.
+SCREEN_HALF_TAN = 0.25
 DRIFT_MEDIAN_FRAMES = 30  # ~1 s; a single frame's solvePnP is far too jittery
+# The landmarker's own tracking filter needs time to settle. Fed identical
+# frames it wanders 4.3 degrees away from its eventual steady state before
+# converging, and takes about 130 frames to get within half a degree -- which
+# would light the badge red at session start for no reason at all. Report
+# nothing until it has calmed down. Afterwards it holds inside 0.5 degrees.
+DRIFT_WARMUP_FRAMES = 150
 REQUALIFY_POINTS = 5      # the smallest density; an affine wants three
 REQUALIFY_SETTLE_MS = 700
 REQUALIFY_COLLECT_MS = 900
