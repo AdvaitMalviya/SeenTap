@@ -54,6 +54,13 @@ screen, and the eyes are actually fixating, so someone else in the room saying
 "click" does nothing. And a transcript that does not clear the match threshold
 produces no action rather than the wrong one.
 
+Two verbs are exempt from the fixation half of that, on purpose. "help" and
+"recalibrate" name no target, and both are asked for from states the gate
+refuses — a user hunting for the commands is sweeping the screen, and a user
+whose calibration has drifted is being mapped off it. Refusing "recalibrate"
+because the calibration is broken is the wrong way round. A face is still
+required, so a bystander's voice alone does nothing either way.
+
 ## Install
 
 ```bash
@@ -99,9 +106,11 @@ python -m seentap.run fit
 
 `calibrate` writes `logs/calib-9-<timestamp>.jsonl` — the feature vectors, the
 target coordinates, and your measured blink threshold. **This file is reused;
-you do not recalibrate every session.** `fit` then prints the accuracy table
-across three calibration densities and three mapping types, with a pass/fail
-verdict against 8% of screen width.
+you do not recalibrate every session.** Mid-session drift is handled by
+requalification instead, which corrects the mapping in memory and leaves this
+file alone. `fit` then prints the accuracy table across three calibration
+densities and three mapping types, with a pass/fail verdict against 8% of
+screen width.
 
 **3. Run it.**
 
@@ -151,6 +160,10 @@ webcam ──> gaze.py ──────> GazeSample ──┐
            9-D features, One Euro)      │    bind() + state machine
 mic ─────> speech.py ────> Utterance ───┘         │
           (VAD, Whisper, own process)             └──> eventlog.py ──> replay.py
+
+"recalibrate" / r ──> calibrate.py ──> new mapping ──> gaze.py
+                      (five points, affine correction,
+                       refused if it misses the gate)
 ```
 
 Landmark inference and speech decoding are both CPU-bound and will fight if
@@ -200,8 +213,10 @@ python -m pytest -q
 201 tests, none of which need a camera or a microphone.
 `tests/test_end_to_end.py` drives a synthetic participant through the whole
 pipeline — fusion, execution, logging, replay, the sweep and the CLI.
-`tests/test_landmarks_real.py` runs MediaPipe against a reference portrait and
-skips if you have not fetched one.
+`tests/test_requalify.py` drives a requalification through the same WebSocket
+broadcast the browser receives, with an obedient synthetic participant on the
+other end. `tests/test_landmarks_real.py` runs MediaPipe against a reference
+portrait and skips if you have not fetched one.
 
 ## Known gaps
 
@@ -209,6 +224,11 @@ skips if you have not fetched one.
   fit is only true when the browser is fullscreen. The hotkey asks for
   fullscreen — a keypress is the only context a browser grants that from — and
   the spoken verb cannot, so it warns on screen instead.
+* A correction lives **in memory for that session only**. Nothing is written
+  back to the calibration file, so the next `serve` starts from the original
+  mapping and any drift correction has to be earned again. Persisting it would
+  mean deciding when a correction is worth keeping, which needs the second
+  session's data to answer.
 * Five points buy an **affine** correction: offset, scale and shear, which is
   what pose drift mostly looks like. A large change of posture deforms the
   mapping in ways an affine cannot express, and still wants a full pass.
