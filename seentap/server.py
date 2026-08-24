@@ -15,10 +15,11 @@ import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
-from seentap import config, eventlog
+from seentap import calibrate, config, eventlog
 from seentap.actions import ActionError, RealExecutor, SimExecutor
 from seentap.baselines import DwellSelector
 from seentap.fusion import Fusion, FusionConfig
@@ -98,8 +99,11 @@ class Runtime:
 
     def __init__(self, cfg: FusionConfig = None, mode: str = "B",
                  real: bool = False, condition: str = "C3",
-                 log_path: str | None = None):
+                 log_path: str | None = None, tracker=None):
         self.fusion = Fusion(cfg or FusionConfig())
+        self.tracker = tracker
+        self._requalifying = False
+        self._task = None
         self.mode = mode
         self.condition = condition
         self.executor = RealExecutor() if real else SimExecutor()
@@ -114,10 +118,11 @@ class Runtime:
     async def on_gaze(self, sample) -> None:
         self.fusion.on_gaze(sample)
         self.log.write("gaze", t=sample.t, x=sample.x, y=sample.y,
-                       conf=sample.conf, zone=sample.zone, blink=sample.blink)
+                       conf=sample.conf, zone=sample.zone, blink=sample.blink,
+                       drift=sample.drift)
         await hub.send({"kind": "gaze", "x": sample.x, "y": sample.y,
                         "zone": sample.zone, "conf": sample.conf,
-                        "drift": None})
+                        "drift": sample.drift})
         if self.condition == "C1":                    # gaze-only baseline
             picked = self.dwell.update(sample.zone, sample.t)
             if picked is not None:
@@ -147,10 +152,82 @@ class Runtime:
                             "help_words": list(config.HELP_VOCAB)})
             return
         if r.verb == "recalibrate":
-            await hub.send({"kind": "action", "ok": True, "verb": r.verb,
-                            "zone": 0, "x": 0, "y": 0, "n": 0})
+            self.start_requalify()
             return
         await self._execute(r.verb, r.x, r.y, r.zone, r.n, utt.onset_t)
+
+    def start_requalify(self) -> None:
+        """Fire and forget, from the spoken verb or the dashboard hotkey alike.
+
+        Keeping the handle matters: a bare create_task is only weakly
+        referenced, and the loop is free to collect a running requalification
+        halfway through.
+        """
+        self._task = asyncio.create_task(self.requalify())
+
+    async def requalify(self) -> dict:
+        """Five points and an affine correction, without stopping the session.
+
+        Head drift is the likeliest way a working session stops working, and a
+        full twenty-second recalibration mid-task is time the user will not
+        spend. This rides the pump that is already running -- the tracker keeps
+        publishing gaze and keeps its latest feature vector to hand -- so the
+        only new machinery is the window that reads it.
+        """
+        tracker = self.tracker
+        if tracker is None or getattr(tracker, "mapping", None) is None:
+            return {"ok": False, "reason": "no mapping to correct"}
+        if self._requalifying:
+            return {"ok": False, "reason": "already requalifying"}
+        self._requalifying = True
+
+        pts = calibrate.targets(config.REQUALIFY_POINTS,
+                                config.SCREEN_W, config.SCREEN_H)
+        F, XY = [], []
+        try:
+            for i, (tx, ty) in enumerate(pts):
+                for phase, seconds in (
+                        ("settle", config.REQUALIFY_SETTLE_MS / 1000.0),
+                        ("collect", config.REQUALIFY_COLLECT_MS / 1000.0)):
+                    await hub.send({"kind": "requalify", "phase": phase,
+                                    "point": i, "of": len(pts),
+                                    "x": tx, "y": ty, "seconds": seconds})
+                    if phase == "settle":
+                        await asyncio.sleep(seconds)
+                        continue
+                    raw = []
+                    end = eventlog.now() + seconds
+                    while eventlog.now() < end:
+                        f = tracker.last_features   # None while blinking or absent
+                        if f is not None:
+                            raw.append({"f": list(f), "conf": 1.0})
+                        await asyncio.sleep(0.02)
+                    med = calibrate.condense(raw)
+                    if med is not None:
+                        F.append(med)
+                        XY.append([tx, ty])
+
+            if len(F) < 3:
+                raise ValueError(f"only {len(F)} of {len(pts)} targets gave "
+                                 f"usable gaze; keeping the old mapping")
+            model, before, after = calibrate.fit_correction(tracker.mapping, F, XY)
+            tracker.mapping = model
+            # The pose these points were collected at is the new reference, so
+            # drift reads near zero again rather than carrying the old offset.
+            tracker.f_ref = np.median(np.asarray(F, dtype=float), axis=0)
+            tracker.filter.reset()
+            out = {"ok": True, "reason": "", "n": len(F),
+                   "before_px": before, "after_px": after}
+        except ValueError as e:
+            out = {"ok": False, "reason": str(e)}
+        finally:
+            self._requalifying = False
+
+        self.log.write("requalify", **out)
+        await hub.send({"kind": "requalify", "phase": "done", **out})
+        await hub.send({"kind": "state", "state": self.fusion.state,
+                        "gate_refusals": self.fusion.gate_refusals})
+        return out
 
     async def _execute(self, verb, x, y, zone, n, onset_t) -> None:
         try:
@@ -195,10 +272,20 @@ async def socket(ws: WebSocket) -> None:
         "w": config.SCREEN_W, "h": config.SCREEN_H,
         "mode": runtime.mode if runtime else "B",
         "executor": type(runtime.executor).__name__ if runtime else "SimExecutor",
+        "drift_warn": config.DRIFT_WARN_PX, "drift_bad": config.DRIFT_BAD_PX,
     }))
     try:
         while True:
-            await ws.receive_text()
+            msg = await ws.receive_text()
+            # The requalification hotkey. Same routine the spoken verb runs, so
+            # the two cannot drift apart -- and it stays reachable when speech
+            # is off entirely, as it is in the gaze-only baseline.
+            try:
+                cmd = json.loads(msg).get("cmd")
+            except (ValueError, AttributeError):
+                continue
+            if cmd == "requalify" and runtime is not None:
+                runtime.start_requalify()
     except WebSocketDisconnect:
         pass
     finally:

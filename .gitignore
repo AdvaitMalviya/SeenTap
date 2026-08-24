@@ -6,3 +6,4 @@ models/
 sweep.csv
 *.png
 .pytest_cache/
+.DS_Store

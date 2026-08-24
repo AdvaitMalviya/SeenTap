@@ -21,10 +21,10 @@ import numpy as np
 from seentap import analyze, calibrate, config, eventlog, replay
 
 
-def _tracker(mapping=None):  # pragma: no cover - needs a camera
+def _tracker(mapping=None, f_ref=None):  # pragma: no cover - needs a camera
     from seentap.gaze import GazeTracker
 
-    return GazeTracker(mapping=mapping)
+    return GazeTracker(mapping=mapping, f_ref=f_ref)
 
 
 def cmd_landmarks(args) -> int:  # pragma: no cover - needs a camera
@@ -184,14 +184,15 @@ def cmd_serve(args) -> int:  # pragma: no cover - needs a camera and a mic
     mapping = calibrate.FITTERS[args.mapping](F, XY)
     print(f"mapping: {args.mapping} on {len(F)} points")
 
-    tracker = _tracker(mapping)
+    # The pose the mapping was fitted at. Live drift is measured against it.
+    tracker = _tracker(mapping, f_ref=np.median(F, axis=0))
     for row in eventlog.read(args.calibration):
         if row.get("kind") == "blink_threshold":
             tracker.blink_ear = row["value"]
             print(f"blink threshold: {tracker.blink_ear:.3f} (from calibration)")
 
     rt = server.Runtime(cfg, mode=args.mode, real=args.real,
-                        condition=args.condition)
+                        condition=args.condition, tracker=tracker)
 
     queue, stop = None, None
     if args.condition != "C1":          # the gaze-only baseline needs no mic
@@ -201,6 +202,7 @@ def cmd_serve(args) -> int:  # pragma: no cover - needs a camera and a mic
 
     server.configure(tracker, queue, rt)
     print(f"dashboard: open a browser on 127.0.0.1:{args.port}")
+    print("say 'recalibrate' or press r on the dashboard if gaze drifts")
     try:
         uvicorn.run(server.app, host="127.0.0.1", port=args.port,
                     log_level="warning")

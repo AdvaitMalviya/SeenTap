@@ -45,8 +45,21 @@
   #help .bar{height:3px;background:var(--accent);border-radius:2px;margin-top:18px;
              transform-origin:left;animation:drain linear forwards}
   @keyframes drain{from{transform:scaleX(1)}to{transform:scaleX(0)}}
+
+  /* Requalification targets. Positioned as a fraction of the viewport, so the
+     fit is only true when the viewport is the screen -- hence the fullscreen
+     request on the hotkey and the warning when it did not take. */
+  #target{position:fixed;inset:0;background:#06090d;z-index:20;display:none}
+  #target.show{display:block}
+  #target .dot{position:absolute;border-radius:50%;transform:translate(-50%,-50%)}
+  #target .dot.settle{width:80px;height:80px;background:var(--accent)}
+  #target .dot.collect{width:18px;height:18px;background:var(--ok)}
+  #target p{position:absolute;left:0;right:0;bottom:8%;margin:0;text-align:center;
+            color:var(--dim)}
+  @keyframes shrink{from{transform:translate(-50%,-50%) scale(1)}
+                    to{transform:translate(-50%,-50%) scale(.22)}}
   @media (prefers-reduced-motion:reduce){
-    #help{transition:none} #help .bar{animation:none}
+    #help{transition:none} #help .bar{animation:none} #target .dot{animation:none}
   }
 </style>
 
@@ -58,6 +71,7 @@
   <span class="badge">drift <b id="drift">—</b></span>
   <span class="badge">gate refusals <b id="refusals">0</b></span>
   <span class="badge">decode <b id="decode">— ms</b></span>
+  <span class="badge dim">r = requalify</span>
 </header>
 
 <div id="help" aria-live="polite">
@@ -67,6 +81,11 @@
     <table><tbody id="help-rows"></tbody></table>
     <div class="bar" id="help-bar"></div>
   </div>
+</div>
+
+<div id="target" aria-hidden="true">
+  <div class="dot" id="target-dot"></div>
+  <p id="target-note"></p>
 </div>
 
 <main>
@@ -131,6 +150,13 @@ function showHelp(controls, seconds, words){
     const b = document.createElement("td"); b.textContent = what;
     tr.append(a, b); body.append(tr);
   }
+  {
+    const tr = document.createElement("tr");
+    const a = document.createElement("td"); a.className = "verb"; a.textContent = "r";
+    const b = document.createElement("td");
+    b.textContent = "requalify now, without speaking";
+    tr.append(a, b); body.append(tr);
+  }
   if (words && words.length){
     const tr = document.createElement("tr");
     const a = document.createElement("td"); a.className = "verb";
@@ -146,6 +172,28 @@ function showHelp(controls, seconds, words){
   panel.classList.add("show");
   clearTimeout(helpTimer);
   helpTimer = setTimeout(() => panel.classList.remove("show"), seconds * 1000);
+}
+
+function showTarget(m){
+  const wrap = document.getElementById("target");
+  if (m.phase === "done"){
+    wrap.classList.remove("show");
+    push("actions", m.ok
+      ? `requalified on ${m.n} points: ${Math.round(m.before_px)} → ${Math.round(m.after_px)} px`
+      : `requalify refused: ${m.reason}`, m.ok ? "done" : "refused");
+    return;
+  }
+  const dot = document.getElementById("target-dot");
+  wrap.classList.add("show");
+  dot.style.left = (m.x / cfg.w * 100) + "%";
+  dot.style.top  = (m.y / cfg.h * 100) + "%";
+  dot.className = "dot " + m.phase;
+  dot.style.animation = "none";
+  void dot.offsetWidth;                       // restart the shrink
+  if (m.phase === "settle") dot.style.animation = `shrink ${m.seconds}s linear forwards`;
+  document.getElementById("target-note").textContent =
+    `look at the dot — point ${m.point + 1} of ${m.of}`
+    + (document.fullscreenElement ? "" : "   (fullscreen for an accurate fit)");
 }
 
 function push(listId, text, cls){
@@ -172,13 +220,16 @@ ws.onmessage = (ev) => {
     const d = document.getElementById("drift");
     d.textContent = m.drift == null ? "—" : Math.round(m.drift) + " px";
     d.className = m.drift == null ? "" :
-      m.drift < 60 ? "drift-ok" : m.drift < 140 ? "drift-warn" : "drift-bad";
+      m.drift < cfg.drift_warn ? "drift-ok" :
+      m.drift < cfg.drift_bad ? "drift-warn" : "drift-bad";
   } else if (m.kind === "state"){
     document.querySelector("#state b").textContent = m.state;
     document.getElementById("refusals").textContent = m.gate_refusals;
   } else if (m.kind === "utterance"){
     push("transcript", `"${m.text}"  ${Math.round(m.decode_ms)} ms`);
     document.getElementById("decode").textContent = Math.round(m.decode_ms)+" ms";
+  } else if (m.kind === "requalify"){
+    showTarget(m);
   } else if (m.kind === "help"){
     showHelp(m.controls, m.seconds, m.help_words);
     push("transcript", "showing controls", "dim");
@@ -192,4 +243,13 @@ ws.onmessage = (ev) => {
   }
 };
 ws.onclose = () => push("actions", "disconnected", "dim");
+
+addEventListener("keydown", (e) => {
+  if (e.key !== "r" || e.metaKey || e.ctrlKey || e.altKey || ws.readyState !== 1) return;
+  // A keypress is the only context a browser grants fullscreen from, and the
+  // targets are placed by fraction of the viewport -- so ask here or the fit
+  // is measured against a window rather than the screen.
+  if (!document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(()=>{});
+  ws.send(JSON.stringify({cmd: "requalify"}));
+});
 </script>

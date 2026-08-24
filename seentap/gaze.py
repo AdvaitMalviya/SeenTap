@@ -48,6 +48,7 @@ class GazeSample:
     conf: float
     zone: int | None = None
     blink: bool = False
+    drift: float | None = None
 
 
 def _xy(lm: np.ndarray, i: int) -> np.ndarray:
@@ -121,6 +122,12 @@ def head_pose(lm: np.ndarray, frame_w: int, frame_h: int) -> tuple[float, float,
     return float(yaw), float(pitch), float(roll)
 
 
+# Where head pose lives inside the feature vector: yaw, pitch, roll and the
+# interocular distance that stands in for depth. Everything drift_px does is
+# rewind these four.
+POSE = slice(4, 8)
+
+
 def features(lm: np.ndarray, frame_w: int, frame_h: int) -> np.ndarray:
     """The nine-dimensional feature vector from Table 6.
 
@@ -145,6 +152,26 @@ def features(lm: np.ndarray, frame_w: int, frame_h: int) -> np.ndarray:
     interocular = float(np.linalg.norm(_xy(lm, R_OUTER) - _xy(lm, L_OUTER)))
     return np.array([hs[0], hs[1], vs[0], vs[1], yaw, pitch, roll,
                      interocular, 1.0], dtype=float)
+
+
+def drift_px(mapping, f: np.ndarray, f_ref: np.ndarray) -> float:
+    """How much of this estimate comes from having moved since calibrating.
+
+    Ask the mapping for this frame's point, then again with the head-pose terms
+    rewound to where they sat during calibration. The gap between the two
+    answers is the part of the prediction that rests on a pose the fit never
+    saw. No ground truth is needed, which is the whole point: mid-session there
+    is none, and head drift is the likeliest way a working session stops
+    working.
+
+    A homography reads zero here by construction -- it consumes only the eye
+    ratios, so it has no pose term to rewind and cannot express this error.
+    """
+    f = np.asarray(f, dtype=float)
+    rewound = f.copy()
+    rewound[POSE] = np.asarray(f_ref, dtype=float)[POSE]
+    a, b = np.atleast_2d(mapping.predict(np.vstack([f, rewound])))
+    return float(math.hypot(a[0] - b[0], a[1] - b[1]))
 
 
 class OneEuro:
@@ -223,7 +250,7 @@ class GazeTracker:
 
     def __init__(self, mapping=None, camera: int | None = 0,
                  screen=(config.SCREEN_W, config.SCREEN_H),
-                 model_path: str | None = None):
+                 model_path: str | None = None, f_ref: np.ndarray | None = None):
         import mediapipe as mp
         from mediapipe.tasks import python as mp_python
         from mediapipe.tasks.python import vision
@@ -253,6 +280,10 @@ class GazeTracker:
         self.blink_ear = config.BLINK_EAR
         self.filter = OneEuro()
         self.last_landmarks: np.ndarray | None = None
+        self.last_features: np.ndarray | None = None
+        # The head pose calibration was fitted at. Drift is measured against it,
+        # and requalification replaces it. None until a calibration is loaded.
+        self.f_ref = None if f_ref is None else np.asarray(f_ref, dtype=float)
         self.last_ear: float = 0.0
         self._last_valid: GazeSample | None = None
         self._blink_since: float | None = None
@@ -307,6 +338,7 @@ class GazeTracker:
         lm = self.detect(rgb)
         if lm is None:
             self._last_valid = None
+            self.last_features = None
             return None, frame
 
         h, w = frame.shape[:2]
@@ -314,6 +346,7 @@ class GazeTracker:
         if self.last_ear < self.blink_ear:
             # Freeze the last good point rather than tracking the eyelid.
             self._blink_since = self._blink_since or t
+            self.last_features = None    # nothing to requalify against mid-blink
             if (self._last_valid
                     and (t - self._blink_since) * 1000 < config.BLINK_HOLD_MS):
                 return GazeSample(t=t, x=self._last_valid.x, y=self._last_valid.y,
@@ -325,12 +358,15 @@ class GazeTracker:
         if self.mapping is None:
             return None, frame
         f = features(lm, w, h)
+        self.last_features = f
         x, y = self.mapping.predict(f.reshape(1, -1))[0]
         x, y = self.filter(float(x), float(y), t)
         sw, sh = self.screen
         on_screen = 0 <= x <= sw and 0 <= y <= sh
         s = GazeSample(t=t, x=x, y=y, conf=1.0 if on_screen else 0.3,
-                       zone=resolve_zone(x, y, sw, sh), blink=False)
+                       zone=resolve_zone(x, y, sw, sh), blink=False,
+                       drift=None if self.f_ref is None
+                       else drift_px(self.mapping, f, self.f_ref))
         self._last_valid = s
         return s, frame
 

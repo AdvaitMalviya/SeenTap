@@ -193,18 +193,20 @@ class Fusion:
             self._to("tracking", now)
             return CommandResult(ok=False, reason="no_verb", onset_t=onset_t)
 
-        if verb in config.HELP_VOCAB:
-            # Asking for the controls needs no target, so it skips binding
-            # entirely. It also skips the fixation requirement: a user who has
-            # forgotten the commands is looking around the screen, which is
-            # exactly the state the fixation gate refuses. A face still has to
-            # be present, so a bystander's voice alone cannot trigger it.
+        if verb in config.HELP_VOCAB or verb == "recalibrate":
+            # Neither needs a target, so neither binds -- and neither can be
+            # made to wait on a steady fixation. A user who has forgotten the
+            # commands is sweeping the screen, and a user whose calibration has
+            # drifted is being mapped off it; both are states the gate refuses,
+            # and refusing "recalibrate" because the calibration is broken is
+            # the wrong way round. A face still has to be present, so a
+            # bystander's voice alone does nothing.
             if not face_present(self.buffer, now):
                 self.gate_refusals += 1
                 self._to("tracking", now)
                 return CommandResult(ok=False, verb=verb, reason="no_face",
                                      onset_t=onset_t)
-            self._to("tracking", now)
+            self._to("recalibrating" if verb == "recalibrate" else "tracking", now)
             return CommandResult(ok=True, verb=verb, reason="", onset_t=onset_t)
 
         if not self._cooled(now):
@@ -215,10 +217,6 @@ class Fusion:
             self.gate_refusals += 1
             self._to("tracking", now)
             return CommandResult(ok=False, reason=why, onset_t=onset_t)
-
-        if verb == "recalibrate":
-            self._to("recalibrating", now)
-            return CommandResult(ok=True, verb=verb, reason="", onset_t=onset_t)
 
         self._to("binding", now)
         r = bind(self.buffer, onset_t, self.cfg, screen=self.screen)

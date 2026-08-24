@@ -67,6 +67,15 @@ ONE_EURO_BETA = 0.007
 GATE_WINDOW_MS = 200      # dispersion is measured over this much history
 GATE_DISPERSION_PX = 120  # above this the eyes are sweeping, not fixating
 
+# --- drift and requalification ---------------------------------------------
+# Tied to the accuracy gate rather than invented: amber at half the error the
+# project is willing to accept, red at the whole of it.
+DRIFT_BAD_PX = GATE_FRAC * SCREEN_W
+DRIFT_WARN_PX = DRIFT_BAD_PX / 2
+REQUALIFY_POINTS = 5      # the smallest density; an affine wants three
+REQUALIFY_SETTLE_MS = 700
+REQUALIFY_COLLECT_MS = 900
+
 # --- speech ----------------------------------------------------------------
 SAMPLE_RATE = 16000
 VAD_FRAME_MS = 30
@@ -98,7 +107,7 @@ VERB_HELP = {
     "drag": "pick up from here",
     "drop": "release here",
     "cancel": "abandon a drag",
-    "recalibrate": "redo the eye calibration",
+    "recalibrate": "five quick points, when gaze has drifted",
 }
 
 # --- fusion ----------------------------------------------------------------

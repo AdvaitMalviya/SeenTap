@@ -74,6 +74,61 @@ def fit_homography(F: np.ndarray, XY: np.ndarray) -> _Homography:
 FITTERS = {"ridge": fit_ridge, "poly": fit_poly, "homography": fit_homography}
 
 
+class _Corrected:
+    """A fitted mapping plus an affine correction from a handful of fresh points.
+
+    Mid-session the head has moved and the mapping, fitted at one pose, is
+    wrong by an amount that is mostly offset and scale. Five points cannot
+    refit nine features -- the quadratic alone wants fifty-four terms -- but
+    they over-determine a 2-D affine, which is the shape the error actually
+    has. Correcting the output costs six parameters instead of refitting the
+    input with too little data to do it honestly.
+    """
+
+    def __init__(self, base, A: np.ndarray):
+        self.base = base
+        self.A = A
+
+    def predict(self, F: np.ndarray) -> np.ndarray:
+        P = np.atleast_2d(np.asarray(self.base.predict(F), dtype=float))
+        return np.column_stack([P, np.ones(len(P))]) @ self.A.T
+
+
+def mean_err(model, F: np.ndarray, XY: np.ndarray) -> float:
+    """Mean Euclidean pixel error, without the breakdown ``validate`` gives."""
+    pred = np.atleast_2d(np.asarray(model.predict(np.asarray(F, dtype=float))))
+    return float(np.linalg.norm(pred - np.asarray(XY, dtype=float), axis=1).mean())
+
+
+def fit_correction(base, F: np.ndarray, XY: np.ndarray,
+                   max_err: float | None = None):
+    """Requalification: correct a drifted mapping from a few fresh points.
+
+    Returns (model, before_px, after_px). Raises when the residual is worse
+    than the accuracy the project accepts at all -- five points collected while
+    the user blinked or glanced away fit an affine to noise just as willingly
+    as to signal, and silently replacing a working mapping with that, mid-task,
+    leaves the user no way back.
+    """
+    F = np.asarray(F, dtype=float)
+    XY = np.asarray(XY, dtype=float)
+    if len(F) < 3:
+        raise ValueError(f"an affine correction needs three points, got {len(F)}")
+    # Correct the original mapping, never a correction: requalifying twice has
+    # to re-measure the drift, not stack a second guess on top of the first.
+    base = getattr(base, "base", base)
+    P = np.atleast_2d(np.asarray(base.predict(F), dtype=float))
+    A, *_ = np.linalg.lstsq(np.column_stack([P, np.ones(len(P))]), XY, rcond=None)
+    model = _Corrected(base, np.asarray(A.T, dtype=float))
+
+    before, after = mean_err(base, F, XY), mean_err(model, F, XY)
+    limit = config.GATE_FRAC * config.SCREEN_W if max_err is None else max_err
+    if after > limit:
+        raise ValueError(f"requalification residual {after:.0f} px exceeds the "
+                         f"{limit:.0f} px gate; keeping the old mapping")
+    return model, before, after
+
+
 def loo_cv_alpha(F: np.ndarray, XY: np.ndarray, fitter, alphas=ALPHAS) -> float:
     """Leave one calibration point out; keep the alpha with the lowest error."""
     F, XY = np.asarray(F, dtype=float), np.asarray(XY, dtype=float)

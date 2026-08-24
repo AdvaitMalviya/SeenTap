@@ -39,6 +39,16 @@ the user has usually moved on, so binding to the current position acts on the
 wrong target — intermittently, which is the hardest kind of bug to catch after
 the fact. Commands bind to the gaze held at speech onset instead.
 
+**Drift is visible and cheap to undo.** A calibration is fitted at one head
+pose and decays as the user settles into their chair — the likeliest way a
+working session stops working, and one nothing else would notice, because gaze
+keeps arriving and the clicks just land in the wrong tile. The dashboard shows
+live drift in pixels, measured with no ground truth: the mapping is asked for
+the current point, then again with the head-pose terms rewound to calibration,
+and the gap between the two answers is what rests on a pose the fit never saw.
+Say **"recalibrate"** or press **r** and five points buy the mapping back in
+about eight seconds rather than the twenty a full pass costs.
+
 **Two safeguards.** The recogniser only arms when a face is visible, gaze is on
 screen, and the eyes are actually fixating, so someone else in the room saying
 "click" does nothing. And a transcript that does not clear the match threshold
@@ -102,6 +112,12 @@ python -m seentap.run serve --calibration logs/calib-9-1758100000.jsonl
 Open `127.0.0.1:8000`, look at a tile, say "click". Use the real filename —
 `--calibration` takes one path, so a `*` glob only works when exactly one file
 matches.
+
+Watch the **drift** badge. Amber is half the error the project accepts, red is
+all of it. Say **"recalibrate"** or press **r** to requalify: five targets, an
+affine correction fitted on top of the existing mapping, and the old mapping
+kept untouched if the new points do not clear the accuracy gate. The session
+keeps running throughout — gaze never stops streaming.
 
 Actions land on a simulated desktop by default. `--real` injects genuine OS
 events and is meant for logged evaluation runs; during a demo a stray real
@@ -181,7 +197,7 @@ per-participant plots beside any p-value, no population-level claim.
 python -m pytest -q
 ```
 
-180 tests, none of which need a camera or a microphone.
+201 tests, none of which need a camera or a microphone.
 `tests/test_end_to_end.py` drives a synthetic participant through the whole
 pipeline — fusion, execution, logging, replay, the sweep and the CLI.
 `tests/test_landmarks_real.py` runs MediaPipe against a reference portrait and
@@ -189,8 +205,13 @@ skips if you have not fetched one.
 
 ## Known gaps
 
-* Saying **"recalibrate"** moves the state machine but does not yet re-collect
-  points or refit the mapping.
-* The dashboard's **drift indicator** is not wired up, and the five-point
-  requalification hotkey that would go with it is not built. Head drift
-  breaking calibration mid-session is the most likely failure in real use.
+* Requalification targets are placed as a fraction of the **viewport**, so the
+  fit is only true when the browser is fullscreen. The hotkey asks for
+  fullscreen — a keypress is the only context a browser grants that from — and
+  the spoken verb cannot, so it warns on screen instead.
+* Five points buy an **affine** correction: offset, scale and shear, which is
+  what pose drift mostly looks like. A large change of posture deforms the
+  mapping in ways an affine cannot express, and still wants a full pass.
+* The **homography** mapping reads zero drift by construction. It consumes only
+  the eye ratios, so it has no pose term to rewind. Ridge and the quadratic
+  both do.
