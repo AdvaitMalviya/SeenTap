@@ -75,7 +75,7 @@ required, so a bystander's voice alone does nothing either way.
 ```bash
 uv venv --python 3.12
 uv pip install -r requirements.txt
-source .venv/bin/activate
+source .venv/bin/activate                  # Windows: .venv\Scripts\activate
 python -m seentap.run fetch --portrait     # model weights, once
 ```
 
@@ -92,6 +92,13 @@ load-bearing:
 On macOS, grant your terminal **Camera**, **Microphone** and **Accessibility**
 in System Settings → Privacy & Security. The first two prompt on use.
 Accessibility never prompts, and without it real clicks silently do nothing.
+
+On Windows, allow **Camera** and **Microphone** for desktop apps in Settings →
+Privacy & security. There is no Accessibility equivalent — `--real` clicks work
+with no grant at all, except into windows running elevated, which silently
+ignore synthetic input unless the terminal is elevated too. Both pins above
+still apply; the `mediapipe` abort the version pin avoids is macOS arm64 only,
+but 0.10.35 is what the landmark indices were checked against.
 
 ## Running it
 
