@@ -43,24 +43,20 @@ the fact. Commands bind to the gaze held at speech onset instead.
 pose and decays as the user settles into their chair — the likeliest way a
 working session stops working, and one nothing else would notice, because gaze
 keeps arriving and the clicks just land in the wrong tile. The dashboard shows
-how far the head has rotated from the calibration pose, in degrees. Say
-**"recalibrate"** or press **r** and five points buy the mapping back in about
-eight seconds rather than the twenty a full pass costs.
+how far you have moved from the calibration pose — turning and leaning both,
+since moving closer rotates nothing but still rescales the mapping about the
+gaze axis. Say **"recalibrate"** or press **r** and five points buy the mapping
+back in about eight seconds rather than the twenty a full pass costs.
 
-It counts leaning as well as turning. Moving closer rotates nothing, so a
-rotation-only measure reads zero through a change worth ninety pixels — what
-it actually does is rescale the mapping about the gaze axis, worst at the
-screen edge, and that is the case converted to an angle here.
-
-Degrees rather than pixels, and measured from the head rather than through the
-mapping, both for the same reason: the appealing version does not work. Asking
-the mapping how much of its own prediction depends on head pose reports
-essentially zero, because a calibration collected sitting still gives it no
-pose signal to learn from — the ridge shrinks those columns away, and the real
-error lands in the eye ratios instead. On a real frame that version reported
-0 px for a head turn worth 151. Converting the honest measurement back into
-pixels would need the screen's physical width and the viewing distance, and
-the system knows neither, so it reports the angle it can actually defend.
+It is measured from the head, in degrees, and both of those are the second
+choice. The appealing version — ask the mapping how much of its own prediction
+depends on head pose — reports essentially zero, because a calibration
+collected sitting still gives it no pose signal to learn from: the ridge
+shrinks those columns away and the real error lands in the eye ratios instead.
+On a real frame that version reported 0 px for a head turn worth 151. Reporting
+the honest measurement in pixels would then need the screen's physical width
+and the viewing distance, and the system knows neither, so it reports the angle
+it can actually defend.
 
 **Two safeguards.** The recogniser only arms when a face is visible, gaze is on
 screen, and the eyes are actually fixating, so someone else in the room saying
@@ -120,13 +116,15 @@ python -m seentap.run fit
 `calibrate` writes `logs/calib-9-<timestamp>.jsonl` — the feature vectors, the
 target coordinates, and your measured blink threshold. That last one is
 measured rather than assumed because eye shape varies enough between people
-that a fixed constant misfires at both ends; calibration already holds your
-eyes open on a target for a second, so the samples are there for free. **This file is reused;
-you do not recalibrate every session.** Mid-session drift is handled by
-requalification instead, which corrects the mapping in memory and leaves this
-file alone. `fit` then prints the accuracy table across three calibration
-densities and three mapping types, with a pass/fail verdict against 8% of
-screen width.
+that a fixed constant misfires at both ends, and calibration already holds your
+eyes open on a target for a second, so the samples are there for free.
+
+**This file is reused; you do not recalibrate every session.** Mid-session
+drift is handled by requalification instead, which corrects the mapping in
+memory and leaves this file alone.
+
+`fit` then prints the accuracy table across three calibration densities and
+three mapping types, with a pass/fail verdict against 8% of screen width.
 
 **3. Run it.**
 
@@ -139,16 +137,17 @@ Open `127.0.0.1:8000`, look at a tile, say "click". Use the real filename —
 matches.
 
 Watch the **drift** badge — how far you have moved from the calibration pose,
-in degrees, amber at 2°, red at 5°. It reports the median of about a second: a
-single frame's head-pose estimate swings past 10° on a motionless head, so the
-smoothing is not optional. It also stays blank for the first five seconds,
-because MediaPipe's own tracking filter takes about that long to settle and
-wanders 4° while it does — reporting during the transient would send you off to
-requalify a calibration that is perfectly good. Say **"recalibrate"** or press
-**r** to requalify: five targets, an affine correction fitted on top of the
-existing mapping, and the old mapping kept untouched if the new points do not
-clear the accuracy gate. The session keeps running throughout — gaze never
-stops streaming.
+in degrees, amber at 2°, red at 5°. Two things about it are not decoration. It
+reports the median of about a second, because a single frame's head-pose
+estimate swings past 10° on a head that has not moved. And it stays blank for
+the first five seconds, because MediaPipe's own tracking filter takes about
+that long to settle and wanders 4° on the way — reporting during the transient
+would send you off to requalify a calibration that is perfectly good.
+
+Say **"recalibrate"** or press **r** to requalify: five targets, an affine
+correction fitted on top of the existing mapping, and the old mapping kept
+untouched if the new points do not clear the accuracy gate. The session keeps
+running throughout — gaze never stops streaming.
 
 Actions land on a simulated desktop by default. `--real` injects genuine OS
 events and is meant for logged evaluation runs; during a demo a stray real
@@ -179,7 +178,8 @@ python -m seentap.run report logs/
 ```
 webcam ──> gaze.py ──────> GazeSample ──┐
           (478 landmarks,               ├──> fusion.py ──> actions.py ──> OS / sim
-           9-D features, One Euro)      │    bind() + state machine
+           9-D features, One Euro,      │    bind() + state machine
+           drift vs calibration pose)   │
 mic ─────> speech.py ────> Utterance ───┘         │
           (VAD, Whisper, own process)             └──> eventlog.py ──> replay.py
 
