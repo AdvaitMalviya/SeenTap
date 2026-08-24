@@ -1,0 +1,135 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>SeenTap</title>
+<style>
+  :root{--bg:#0e1116;--panel:#161b22;--line:#272e38;--fg:#e6edf3;--dim:#8b949e;
+        --ok:#3fb950;--warn:#d29922;--bad:#f85149;--accent:#58a6ff}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+  header{display:flex;gap:18px;align-items:center;padding:10px 16px;
+         border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .badge{padding:2px 10px;border-radius:99px;background:var(--panel);
+         border:1px solid var(--line);white-space:nowrap}
+  .badge b{color:var(--accent);font-weight:600}
+  #state{border-color:var(--accent)}
+  .drift-ok{color:var(--ok)} .drift-warn{color:var(--warn)} .drift-bad{color:var(--bad)}
+  main{display:grid;grid-template-columns:1fr 320px;gap:14px;padding:14px;
+       align-items:start}
+  @media (max-width:900px){main{grid-template-columns:1fr}}
+  #desk{width:100%;aspect-ratio:1512/982;background:var(--panel);
+        border:1px solid var(--line);border-radius:8px;display:block}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+         padding:10px;margin-bottom:12px}
+  .panel h2{margin:0 0 8px;font-size:12px;letter-spacing:.08em;
+            text-transform:uppercase;color:var(--dim);font-weight:600}
+  ul{list-style:none;margin:0;padding:0;max-height:220px;overflow-y:auto}
+  li{padding:4px 0;border-bottom:1px solid var(--line);word-break:break-word}
+  li:last-child{border-bottom:0}
+  .refused{color:var(--bad)} .done{color:var(--ok)} .dim{color:var(--dim)}
+</style>
+
+<header>
+  <strong>SeenTap</strong>
+  <span class="badge" id="state">state <b>—</b></span>
+  <span class="badge">mode <b id="mode">—</b></span>
+  <span class="badge">exec <b id="exec">—</b></span>
+  <span class="badge">drift <b id="drift">—</b></span>
+  <span class="badge">gate refusals <b id="refusals">0</b></span>
+  <span class="badge">decode <b id="decode">— ms</b></span>
+</header>
+
+<main>
+  <canvas id="desk" width="1512" height="982"></canvas>
+  <div>
+    <div class="panel"><h2>Transcript</h2><ul id="transcript"></ul></div>
+    <div class="panel"><h2>Actions</h2><ul id="actions"></ul></div>
+  </div>
+</main>
+
+<script>
+const canvas = document.getElementById("desk");
+const ctx = canvas.getContext("2d");
+let cfg = {cols:4, rows:3, w:1512, h:982};
+let gaze = null, lastAction = null, trail = [];
+
+function draw(){
+  const {w,h,cols,rows} = cfg;
+  canvas.width = w; canvas.height = h;
+  ctx.clearRect(0,0,w,h);
+  const tw = w/cols, th = h/rows;
+
+  for (let r=0;r<rows;r++) for (let c=0;c<cols;c++){
+    const z = r*cols+c, x=c*tw, y=r*th;
+    const hot = gaze && gaze.zone === z;
+    ctx.fillStyle = hot ? "#1f2b3d" : "#12161c";
+    ctx.fillRect(x+4,y+4,tw-8,th-8);
+    ctx.strokeStyle = hot ? "#58a6ff" : "#272e38";
+    ctx.lineWidth = hot ? 3 : 1;
+    ctx.strokeRect(x+4,y+4,tw-8,th-8);
+    ctx.fillStyle = hot ? "#58a6ff" : "#5b6673";
+    ctx.font = "600 34px ui-monospace,monospace";
+    ctx.fillText(String(z+1), x+18, y+46);
+  }
+
+  ctx.strokeStyle = "rgba(88,166,255,.35)"; ctx.lineWidth = 2;
+  ctx.beginPath();
+  trail.forEach((p,i)=> i ? ctx.lineTo(p.x,p.y) : ctx.moveTo(p.x,p.y));
+  ctx.stroke();
+
+  if (lastAction){
+    ctx.strokeStyle = "#3fb950"; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(lastAction.x, lastAction.y, 34, 0, 7); ctx.stroke();
+    ctx.fillStyle = "#3fb950"; ctx.font = "600 26px ui-monospace,monospace";
+    ctx.fillText(lastAction.verb, lastAction.x + 44, lastAction.y + 8);
+  }
+  if (gaze){
+    ctx.fillStyle = "rgba(88,166,255,.9)";
+    ctx.beginPath(); ctx.arc(gaze.x, gaze.y, 12, 0, 7); ctx.fill();
+  }
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+function push(listId, text, cls){
+  const ul = document.getElementById(listId);
+  const li = document.createElement("li");
+  li.textContent = text;
+  if (cls) li.className = cls;
+  ul.prepend(li);
+  while (ul.children.length > 60) ul.lastChild.remove();
+}
+
+const ws = new WebSocket((location.protocol === "https:" ? "wss" : "ws")
+                         + "://" + location.host + "/ws");
+ws.onmessage = (ev) => {
+  const m = JSON.parse(ev.data);
+  if (m.kind === "config"){
+    cfg = Object.assign(cfg, m);
+    document.getElementById("mode").textContent = m.mode;
+    document.getElementById("exec").textContent = m.executor;
+  } else if (m.kind === "gaze"){
+    gaze = m;
+    trail.push({x:m.x, y:m.y});
+    if (trail.length > 45) trail.shift();
+    const d = document.getElementById("drift");
+    d.textContent = m.drift == null ? "—" : Math.round(m.drift) + " px";
+    d.className = m.drift == null ? "" :
+      m.drift < 60 ? "drift-ok" : m.drift < 140 ? "drift-warn" : "drift-bad";
+  } else if (m.kind === "state"){
+    document.querySelector("#state b").textContent = m.state;
+    document.getElementById("refusals").textContent = m.gate_refusals;
+  } else if (m.kind === "utterance"){
+    push("transcript", `"${m.text}"  ${Math.round(m.decode_ms)} ms`);
+    document.getElementById("decode").textContent = Math.round(m.decode_ms)+" ms";
+  } else if (m.kind === "action"){
+    if (m.ok){
+      lastAction = m;
+      push("actions", `${m.verb} → tile ${m.zone+1}  (${m.n} samples)`, "done");
+    } else {
+      push("actions", `refused: ${m.reason}`, "refused");
+    }
+  }
+};
+ws.onclose = () => push("actions", "disconnected", "dim");
+</script>

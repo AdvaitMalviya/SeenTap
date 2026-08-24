@@ -1,0 +1,17 @@
+ctranslate2==4.8.1
+fastapi==0.141.1
+faster-whisper==1.2.1
+matplotlib==3.11.1
+mediapipe==0.10.35
+numpy==2.5.2
+opencv-python==5.0.0.93
+pandas==3.0.5
+pyautogui==0.9.54
+pytest==9.1.1
+rapidfuzz==3.14.5
+scikit-learn==1.9.0
+scipy==1.18.1
+sounddevice==0.5.6
+uvicorn==0.52.4
+webrtcvad-wheels==2.0.14
+websockets==17.0.1

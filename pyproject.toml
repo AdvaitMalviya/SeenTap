@@ -1,0 +1,9 @@
+[project]
+name = "seentap"
+version = "0.1.0"
+description = "Multimodal gaze and voice controlled HCI system"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::UserWarning"]

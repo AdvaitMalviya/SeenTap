@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+logs/*.jsonl
+models/
+sweep.csv
+*.png
+.pytest_cache/

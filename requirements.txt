@@ -1,0 +1,19 @@
+# Verified to resolve and import on Python 3.11, 3.12 and 3.14 (arm64 macOS).
+# webrtcvad-wheels, NOT webrtcvad: the original fails at import on
+# `import pkg_resources`, which setuptools 84 removed, on every Python version.
+mediapipe==0.10.35   # 1.0.1 aborts the face landmarker graph on macOS arm64
+opencv-python
+numpy
+scipy
+scikit-learn
+sounddevice
+webrtcvad-wheels
+faster-whisper
+rapidfuzz
+pyautogui
+fastapi
+uvicorn[standard]
+websockets
+pandas
+matplotlib
+pytest
