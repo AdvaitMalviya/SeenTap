@@ -114,6 +114,13 @@ def bind(buffer, onset_t: float, cfg: FusionConfig = None,
     return BindResult(ok=True, x=x, y=y, zone=zone, n=len(candidates), reason="")
 
 
+def face_present(buffer, t_now: float,
+                 window_ms: int = config.GATE_WINDOW_MS) -> bool:
+    """Someone is in front of the camera, with no claim about where they look."""
+    return any(t_now - window_ms / 1000.0 <= s.t <= t_now and not s.blink
+               for s in buffer)
+
+
 def gate(buffer, t_now: float, window_ms: int = config.GATE_WINDOW_MS,
          max_dispersion: float = config.GATE_DISPERSION_PX,
          screen=None) -> tuple[bool, str]:
@@ -179,21 +186,35 @@ class Fusion:
 
     def on_utterance(self, onset_t: float, text: str, now: float) -> CommandResult:
         """One spoken command, from onset timestamp to executable action."""
+        self._to("listening", now)
+        self._to("decoding", now)
+        verb, _score = parse.parse_any(text)
+        if verb is None:
+            self._to("tracking", now)
+            return CommandResult(ok=False, reason="no_verb", onset_t=onset_t)
+
+        if verb in config.HELP_VOCAB:
+            # Asking for the controls needs no target, so it skips binding
+            # entirely. It also skips the fixation requirement: a user who has
+            # forgotten the commands is looking around the screen, which is
+            # exactly the state the fixation gate refuses. A face still has to
+            # be present, so a bystander's voice alone cannot trigger it.
+            if not face_present(self.buffer, now):
+                self.gate_refusals += 1
+                self._to("tracking", now)
+                return CommandResult(ok=False, verb=verb, reason="no_face",
+                                     onset_t=onset_t)
+            self._to("tracking", now)
+            return CommandResult(ok=True, verb=verb, reason="", onset_t=onset_t)
+
         if not self._cooled(now):
             return CommandResult(ok=False, reason="cooldown", onset_t=onset_t)
 
-        self._to("listening", now)
         ok, why = gate(self.buffer, now, screen=self.screen)
         if not ok:
             self.gate_refusals += 1
             self._to("tracking", now)
             return CommandResult(ok=False, reason=why, onset_t=onset_t)
-
-        self._to("decoding", now)
-        verb, _score = parse.parse(text)
-        if verb is None:
-            self._to("tracking", now)
-            return CommandResult(ok=False, reason="no_verb", onset_t=onset_t)
 
         if verb == "recalibrate":
             self._to("recalibrating", now)

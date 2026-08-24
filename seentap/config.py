@@ -83,6 +83,24 @@ VOCAB = [
 ]
 PARSE_THRESHOLD = 75      # below this the utterance is refused, never guessed
 
+# Spoken to the application rather than to the screen. Kept apart from VOCAB so
+# the ten action verbs stay exactly the ten the study evaluates.
+HELP_VOCAB = ("help", "controls")
+HELP_SECONDS = 7          # how long the overlay stays up before fading
+
+VERB_HELP = {
+    "click": "select what you are looking at",
+    "double click": "open what you are looking at",
+    "right click": "context menu",
+    "select": "highlight the tile",
+    "scroll up": "scroll up",
+    "scroll down": "scroll down",
+    "drag": "pick up from here",
+    "drop": "release here",
+    "cancel": "abandon a drag",
+    "recalibrate": "redo the eye calibration",
+}
+
 # --- fusion ----------------------------------------------------------------
 COOLDOWN_MS = 250
 LEAD_MS_SWEEP = (0, 100, 200, 300)

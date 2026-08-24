@@ -42,6 +42,16 @@ def parse(text: str, vocab: list[str] | None = None,
     return (verb, float(score)) if score >= threshold else (None, float(score))
 
 
+def parse_any(text: str, threshold: float = config.PARSE_THRESHOLD):
+    """Match over the action verbs and the help words together.
+
+    One ranking rather than two passes, so 'controls' cannot be claimed by a
+    help-first check when the user actually said 'scroll down', and vice versa.
+    """
+    return parse(text, vocab=list(config.VOCAB) + list(config.HELP_VOCAB),
+                 threshold=threshold)
+
+
 def _take_number(tokens: list[str]) -> tuple[int | None, list[str]]:
     for i, tok in enumerate(tokens):
         if tok.isdigit():

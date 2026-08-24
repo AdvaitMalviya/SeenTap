@@ -27,6 +27,27 @@
   li{padding:4px 0;border-bottom:1px solid var(--line);word-break:break-word}
   li:last-child{border-bottom:0}
   .refused{color:var(--bad)} .done{color:var(--ok)} .dim{color:var(--dim)}
+
+  /* Controls overlay: shown on "help" or "controls", then fades out. */
+  #help{position:fixed;inset:0;display:flex;align-items:center;
+        justify-content:center;background:rgba(6,9,13,.82);z-index:10;
+        opacity:0;pointer-events:none;transition:opacity .35s ease}
+  #help.show{opacity:1}
+  #help .card{background:var(--panel);border:1px solid var(--accent);
+              border-radius:14px;padding:26px 32px;max-width:640px;width:90%}
+  #help h2{margin:0 0 4px;font-size:20px;color:var(--fg);letter-spacing:0}
+  #help p.sub{margin:0 0 18px;color:var(--dim);font-size:13px}
+  #help table{width:100%;border-collapse:collapse}
+  #help td{padding:6px 0;border-bottom:1px solid var(--line);vertical-align:top}
+  #help td.verb{color:var(--accent);font-weight:600;white-space:nowrap;
+                padding-right:20px;width:1%}
+  #help tr:last-child td{border-bottom:0}
+  #help .bar{height:3px;background:var(--accent);border-radius:2px;margin-top:18px;
+             transform-origin:left;animation:drain linear forwards}
+  @keyframes drain{from{transform:scaleX(1)}to{transform:scaleX(0)}}
+  @media (prefers-reduced-motion:reduce){
+    #help{transition:none} #help .bar{animation:none}
+  }
 </style>
 
 <header>
@@ -38,6 +59,15 @@
   <span class="badge">gate refusals <b id="refusals">0</b></span>
   <span class="badge">decode <b id="decode">— ms</b></span>
 </header>
+
+<div id="help" aria-live="polite">
+  <div class="card">
+    <h2>Controls</h2>
+    <p class="sub">Look at a tile, then say the command.</p>
+    <table><tbody id="help-rows"></tbody></table>
+    <div class="bar" id="help-bar"></div>
+  </div>
+</div>
 
 <main>
   <canvas id="desk" width="1512" height="982"></canvas>
@@ -91,6 +121,33 @@ function draw(){
 }
 requestAnimationFrame(draw);
 
+let helpTimer = null;
+function showHelp(controls, seconds, words){
+  const body = document.getElementById("help-rows");
+  body.innerHTML = "";
+  for (const [verb, what] of controls){
+    const tr = document.createElement("tr");
+    const a = document.createElement("td"); a.className = "verb"; a.textContent = verb;
+    const b = document.createElement("td"); b.textContent = what;
+    tr.append(a, b); body.append(tr);
+  }
+  if (words && words.length){
+    const tr = document.createElement("tr");
+    const a = document.createElement("td"); a.className = "verb";
+    a.textContent = words.join(" / ");
+    const b = document.createElement("td"); b.textContent = "show this list";
+    tr.append(a, b); body.append(tr);
+  }
+  const panel = document.getElementById("help");
+  const bar = document.getElementById("help-bar");
+  bar.style.animation = "none";
+  void bar.offsetWidth;                       // restart the drain animation
+  bar.style.animation = `drain ${seconds}s linear forwards`;
+  panel.classList.add("show");
+  clearTimeout(helpTimer);
+  helpTimer = setTimeout(() => panel.classList.remove("show"), seconds * 1000);
+}
+
 function push(listId, text, cls){
   const ul = document.getElementById(listId);
   const li = document.createElement("li");
@@ -122,6 +179,9 @@ ws.onmessage = (ev) => {
   } else if (m.kind === "utterance"){
     push("transcript", `"${m.text}"  ${Math.round(m.decode_ms)} ms`);
     document.getElementById("decode").textContent = Math.round(m.decode_ms)+" ms";
+  } else if (m.kind === "help"){
+    showHelp(m.controls, m.seconds, m.help_words);
+    push("transcript", "showing controls", "dim");
   } else if (m.kind === "action"){
     if (m.ok){
       lastAction = m;

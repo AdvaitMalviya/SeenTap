@@ -23,6 +23,12 @@ the machine.
 **Ten commands**: click, double click, right click, select, scroll up, scroll
 down, drag, drop, cancel, recalibrate.
 
+Say **"help"** or **"controls"** at any point and the full list appears on
+screen, then fades. That one needs no target, so it skips binding entirely —
+and skips the fixation requirement too, since someone who has forgotten the
+commands is looking around the screen, which is exactly the state the normal
+gate refuses.
+
 **Two modes.** A free cursor driven by filtered gaze, or a 4×3 grid of large
 tiles where gaze picks the tile and voice confirms. A tile dwarfs the tracker's
 error, so the grid stays usable even at the pessimistic end of webcam accuracy.
@@ -175,7 +181,7 @@ per-participant plots beside any p-value, no population-level claim.
 python -m pytest -q
 ```
 
-158 tests, none of which need a camera or a microphone.
+180 tests, none of which need a camera or a microphone.
 `tests/test_end_to_end.py` drives a synthetic participant through the whole
 pipeline — fusion, execution, logging, replay, the sweep and the CLI.
 `tests/test_landmarks_real.py` runs MediaPipe against a reference portrait and

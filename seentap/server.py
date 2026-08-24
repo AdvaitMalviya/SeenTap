@@ -139,6 +139,13 @@ class Runtime:
                            onset_t=utt.onset_t)
             await hub.send({"kind": "action", "ok": False, "reason": r.reason})
             return
+        if r.verb in config.HELP_VOCAB:
+            self.log.write("help", onset_t=utt.onset_t, said=r.verb)
+            await hub.send({"kind": "help", "seconds": config.HELP_SECONDS,
+                            "controls": [[v, config.VERB_HELP[v]]
+                                         for v in config.VOCAB],
+                            "help_words": list(config.HELP_VOCAB)})
+            return
         if r.verb == "recalibrate":
             await hub.send({"kind": "action", "ok": True, "verb": r.verb,
                             "zone": 0, "x": 0, "y": 0, "n": 0})
