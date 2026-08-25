@@ -102,6 +102,11 @@ VAD_AGGRESSIVENESS = 2
 WHISPER_MODEL = "base.en"
 WHISPER_COMPUTE = "int8"
 
+# Bump when features() changes shape or meaning: a calibration file holds
+# fitted feature vectors, and reading old ones with new features is silent
+# nonsense. 2 moved the vertical ratio off the eyelid onto the eye corners.
+FEATURES_VERSION = 2
+
 VOCAB = [
     "click", "double click", "right click", "select",
     "scroll up", "scroll down", "drag", "drop", "cancel", "recalibrate",

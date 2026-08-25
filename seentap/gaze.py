@@ -18,8 +18,8 @@ from seentap import config
 # MediaPipe Face Mesh indices, refine_landmarks=True (478 points).
 # Verify these against the installed model version before trusting a session:
 # `python -m seentap.run landmarks` draws them on a live frame.
-L_OUTER, L_INNER, L_TOP, L_BOT = 33, 133, 159, 145
-R_INNER, R_OUTER, R_TOP, R_BOT = 362, 263, 386, 374
+L_OUTER, L_INNER = 33, 133
+R_INNER, R_OUTER = 362, 263
 L_IRIS, R_IRIS = 468, 473
 NOSE_TIP, CHIN, MOUTH_L, MOUTH_R = 1, 152, 61, 291
 
@@ -138,15 +138,24 @@ def features(lm: np.ndarray, frame_w: int, frame_h: int) -> np.ndarray:
     mapping the geometry it needs to absorb the rest.
     """
     hs, vs = [], []
-    for iris, inner, outer, top, bot in (
-        (L_IRIS, L_INNER, L_OUTER, L_TOP, L_BOT),
-        (R_IRIS, R_INNER, R_OUTER, R_TOP, R_BOT),
-    ):
-        ic = _xy(lm, iris)
-        width = abs(_xy(lm, outer)[0] - _xy(lm, inner)[0])
-        lid = abs(_xy(lm, top)[1] - _xy(lm, bot)[1])
-        hs.append((ic[0] - _xy(lm, inner)[0]) / width if width > 1e-9 else 0.0)
-        vs.append((ic[1] - _xy(lm, top)[1]) / lid if lid > 1e-9 else 0.0)
+    for iris, inner, outer in ((L_IRIS, L_INNER, L_OUTER),
+                               (R_IRIS, R_INNER, R_OUTER)):
+        ic, i_p, o_p = _xy(lm, iris), _xy(lm, inner), _xy(lm, outer)
+        width = abs(o_p[0] - i_p[0])
+        if width <= 1e-9:
+            hs.append(0.0)
+            vs.append(0.0)
+            continue
+        hs.append((ic[0] - i_p[0]) / width)
+        # Vertical is measured against the eye-corner line, not the eyelid.
+        # The lid rides down with the gaze, so dividing by the lid gap shrinks
+        # the numerator and the denominator together and the ratio hardly
+        # moves: on a real calibration the vertical eye signal correlated
+        # -0.32 with the vertical target where horizontal managed +0.96. The
+        # corners are rigid, and reusing the eye width keeps both axes on one
+        # scale -- the lid gap is four times smaller, which amplified whatever
+        # signal survived into noise.
+        vs.append((ic[1] - (i_p[1] + o_p[1]) / 2) / width)
 
     yaw, pitch, roll = head_pose(lm, frame_w, frame_h)
     interocular = float(np.linalg.norm(_xy(lm, R_OUTER) - _xy(lm, L_OUTER)))

@@ -42,6 +42,7 @@ def test_a_mistyped_calibration_path_says_so_and_lists_what_there_is(tmp_path,
 
     monkeypatch.setattr(config, "LOG_DIR", str(tmp_path))
     with eventlog.EventLog(tmp_path / "calib-9-1787629345.jsonl") as log:
+        log.write("calibration", density=9, features_version=config.FEATURES_VERSION)
         for i in range(9):
             log.write("calib_point", f=[0.0] * 9, target=[i * 10.0, i * 10.0])
 
@@ -65,8 +66,28 @@ def test_a_real_but_useless_calibration_file_is_refused_too(tmp_path, capsys,
     monkeypatch.setattr(config, "LOG_DIR", str(tmp_path))
     path = tmp_path / "calib-9-1.jsonl"
     with eventlog.EventLog(path) as log:
+        log.write("calibration", density=9, features_version=config.FEATURES_VERSION)
         log.write("calib_point", f=[0.0] * 9, target=[1.0, 1.0])
 
     with pytest.raises(SystemExit):
         run._require_calib(str(path))
     assert "1 calibration point(s)" in capsys.readouterr().err
+
+
+def test_a_calibration_from_an_older_feature_layout_is_refused(tmp_path, capsys):
+    """The file holds fitted feature vectors. Reading v1 vectors with v2
+    features is silent nonsense, not a slightly worse fit."""
+    import pytest
+
+    from seentap import eventlog, run
+
+    path = tmp_path / "calib-9-old.jsonl"
+    with eventlog.EventLog(path) as log:
+        log.write("calibration", density=9)          # no version: v1
+        for i in range(9):
+            log.write("calib_point", f=[0.0] * 9, target=[i * 10.0, i * 10.0])
+
+    with pytest.raises(SystemExit):
+        run._require_calib(str(path))
+    err = capsys.readouterr().err
+    assert "v1" in err and "recorded again" in err

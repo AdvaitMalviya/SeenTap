@@ -131,7 +131,16 @@ drift is handled by requalification instead, which corrects the mapping in
 memory and leaves this file alone.
 
 `fit` then prints the accuracy table across three calibration densities and
-three mapping types, with a pass/fail verdict against 8% of screen width.
+three mapping types, with a pass/fail verdict against 8% of screen width. It
+also reports how well each axis of your eye actually tracked the target. A
+calibration can capture nine clean points and still be useless if one axis
+carries no signal, and the error figure alone does not say which — so if
+vertical comes back near zero, refitting will not help and it needs recording
+again.
+
+Scored against a **held-out** recording only if you pass one as `--held`.
+Without it the numbers are fitted errors, not accuracy, and `fit` says so
+rather than quietly flattering itself.
 
 **3. Run it.**
 
@@ -240,7 +249,7 @@ per-participant plots beside any p-value, no population-level claim.
 python -m pytest -q
 ```
 
-211 tests, none of which need a camera or a microphone.
+215 tests, none of which need a camera or a microphone.
 `tests/test_end_to_end.py` drives a synthetic participant through the whole
 pipeline — fusion, execution, logging, replay, the sweep and the CLI.
 `tests/test_requalify.py` drives a requalification through the same WebSocket
@@ -262,6 +271,10 @@ portrait and skips if you have not fetched one.
 * Five points buy an **affine** correction: offset, scale and shear, which is
   what pose drift mostly looks like. A large change of posture deforms the
   mapping in ways an affine cannot express, and still wants a full pass.
+* Calibration files carry a **feature-layout version**. Change what
+  `features()` computes and every saved file becomes unreadable — the vectors
+  are already extracted, so old ones would be silent nonsense rather than a
+  worse fit. `serve` and `fit` refuse them and say to record again.
 * Turning the depth reading into an angle assumes a **laptop at arm's length**
   — roughly a 300 mm screen at 600 mm, the `SCREEN_HALF_TAN` constant. It is
   the one piece of geometry the system cannot measure for itself, and it wants

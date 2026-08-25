@@ -151,7 +151,8 @@ def _write_calibration(path, density, seed=0, noise=3.0):
     rng = np.random.default_rng(seed)
     pts = calibrate.targets(density, 1512, 982)
     with eventlog.EventLog(path) as log:
-        log.write("calibration", density=density, screen=[1512, 982])
+        log.write("calibration", density=density, screen=[1512, 982],
+                  features_version=config.FEATURES_VERSION)
         for (tx, ty) in pts:
             hx = (tx / 1512 - 0.5) * 0.8
             vy = (ty / 982 - 0.5) * 0.8

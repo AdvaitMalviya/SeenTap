@@ -198,6 +198,23 @@ def nine_cell(sessions: dict[int, tuple], held: tuple) -> list[dict]:
     return rows
 
 
+def signal_report(F: np.ndarray, XY: np.ndarray) -> dict:
+    """Does the eye actually track the target on each axis?
+
+    A calibration can capture nine clean points and still be useless if one
+    axis carries no signal, and the fitted error alone does not say which.
+    Vertical is the one that fails: it is the harder axis, and the eyelid
+    covers most of the iris's travel.
+    """
+    F, XY = np.asarray(F, dtype=float), np.asarray(XY, dtype=float)
+    out = {}
+    for name, fi, xyi in (("horizontal", 0, 0), ("vertical", 2, 1)):
+        col, tgt = F[:, fi], XY[:, xyi]
+        out[name] = (0.0 if np.std(col) < 1e-12 or np.std(tgt) < 1e-12
+                     else float(np.corrcoef(col, tgt)[0, 1]))
+    return out
+
+
 def gate_passed(table: list[dict], screen_w: int = config.SCREEN_W,
                 frac: float = config.GATE_FRAC):
     """The day-8 decision. Best cell against 8% of screen width.

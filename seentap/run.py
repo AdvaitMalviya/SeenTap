@@ -77,7 +77,8 @@ def cmd_calibrate(args) -> int:  # pragma: no cover - needs a camera
     kept = 0
     open_ears = []
     with eventlog.EventLog(out) as log:
-        log.write("calibration", density=args.density, screen=[w, h])
+        log.write("calibration", density=args.density, screen=[w, h],
+                  features_version=config.FEATURES_VERSION)
         for (tx, ty) in pts:
             for phase, seconds in (("settle", 1.0), ("collect", 1.0)):
                 t_end = time.monotonic() + seconds
@@ -119,12 +120,14 @@ def cmd_calibrate(args) -> int:  # pragma: no cover - needs a camera
 
 
 def _load_calib(path):
-    F, XY = [], []
+    F, XY, version = [], [], 1
     for row in eventlog.read(path):
         if row.get("kind") == "calib_point":
             F.append(row["f"])
             XY.append(row["target"])
-    return np.asarray(F, dtype=float), np.asarray(XY, dtype=float)
+        elif row.get("kind") == "calibration":
+            version = row.get("features_version", 1)
+    return np.asarray(F, dtype=float), np.asarray(XY, dtype=float), version
 
 
 def _require_calib(path):
@@ -134,40 +137,78 @@ def _require_calib(path):
     nothing for a file that is not there -- and the empty array only fails
     forty frames down inside sklearn, where nothing names the actual mistake.
     """
-    F, XY = _load_calib(path)
-    if len(F) >= 4:
-        return F, XY
-    found = sorted(glob.glob(f"{config.LOG_DIR}/calib-*.jsonl"))
-    why = ("does not exist" if not Path(path).exists() else
-           f"holds {len(F)} calibration point(s); a mapping needs at least four")
-    hint = ("\n  ".join(["calibration files here:", *found]) if found else
-            "no calibration files yet -- run:\n"
-            "  python -m seentap.run calibrate --density 9")
-    print(f"{path} {why}.\n{hint}", file=sys.stderr)
-    raise SystemExit(2)
+    def bail(why: str, fix: str | None = None):
+        found = sorted(glob.glob(f"{config.LOG_DIR}/calib-*.jsonl"))
+        tail = fix or ("\n  ".join(["calibration files here:", *found]) if found
+                       else "no calibration files yet -- run:\n"
+                            "  python -m seentap.run calibrate --density 9")
+        print(f"{path} {why}.\n{tail}", file=sys.stderr)
+        raise SystemExit(2)
+
+    if not Path(path).exists():
+        bail("does not exist")
+    F, XY, version = _load_calib(path)
+    if version != config.FEATURES_VERSION:
+        bail(f"was recorded with feature layout v{version}, and this build uses "
+             f"v{config.FEATURES_VERSION}",
+             "The saved vectors mean something different now, so it has to be "
+             "recorded again:\n  python -m seentap.run calibrate --density 9")
+    if len(F) < 4:
+        bail(f"holds {len(F)} calibration point(s); a mapping needs at least four")
+    return F, XY
 
 
 def cmd_fit(args) -> int:
     """Study 1 and the day-8 gate, from saved calibration passes."""
-    sessions = {}
+    sessions, skipped = {}, []
     for path in sorted(glob.glob(args.pattern)):
-        F, XY = _load_calib(path)
-        if len(F) >= 4:
-            sessions[len(F)] = (F, XY)
+        F, XY, version = _load_calib(path)
+        if version != config.FEATURES_VERSION or len(F) < 4:
+            skipped.append(f"{path} (v{version}, {len(F)} points)")
+            continue
+        # Keyed by density, and the newest wins: keying by point count silently
+        # dropped every earlier pass at the same density, so a second nine-point
+        # calibration replaced the first without saying so.
+        sessions[len(F)] = (F, XY, path)
+    if skipped:
+        print("skipped:\n  " + "\n  ".join(skipped), file=sys.stderr)
     if not sessions:
-        print(f"no calibration points matched {args.pattern!r}", file=sys.stderr)
+        print(f"no usable calibration matched {args.pattern!r}", file=sys.stderr)
         return 1
-    held = _load_calib(args.held) if args.held else sessions[max(sessions)]
 
-    table = calibrate.nine_cell(sessions, held)
+    if args.held:
+        Fh, XYh, _ = _load_calib(args.held)
+        held, held_from = (Fh, XYh), args.held
+    else:
+        # Without a separate recording there is nothing held out, and scoring a
+        # fit on the points it was fitted to is not an accuracy figure.
+        density = max(sessions)
+        held, held_from = sessions[density][:2], f"{sessions[density][2]} (ITSELF)"
+
+    table = calibrate.nine_cell({d: v[:2] for d, v in sessions.items()}, held)
     print(analyze.markdown_table(table))
     passed, threshold, best = calibrate.gate_passed(table, config.SCREEN_W)
     print(f"\nday-8 gate: threshold {threshold:.0f} px "
           f"({config.GATE_FRAC:.0%} of {config.SCREEN_W}); "
           f"best {best['mean_err']:.1f} px "
           f"({best['mapping']}, {best['density']} points)")
-    print("PASS - continue on MediaPipe" if passed else
-          "FAIL - freeze MediaPipe, WebGazer.js becomes primary")
+    print(f"scored against: {held_from}")
+    if "ITSELF" in held_from:
+        print("  these are fitted errors, not accuracy -- record a second pass "
+              "and pass it as --held for a real number")
+
+    Fb, XYb = sessions[max(sessions)][:2]
+    sig = calibrate.signal_report(Fb, XYb)
+    print(f"\neye signal: horizontal r = {sig['horizontal']:+.2f}, "
+          f"vertical r = {sig['vertical']:+.2f}")
+    for axis, r in sig.items():
+        if abs(r) < 0.7:
+            print(f"  the {axis} eye signal does not track the target. The "
+                  f"calibration did not capture {axis} gaze -- refitting will "
+                  f"not help, it has to be recorded again.")
+
+    print("\nPASS - continue on MediaPipe" if passed else
+          "\nFAIL - freeze MediaPipe, WebGazer.js becomes primary")
     if args.save:
         Path(args.save).write_text(json.dumps(table, indent=2))
     return 0

@@ -160,3 +160,52 @@ def test_tile_is_larger_than_the_gate_threshold():
     w = config.SCREEN_W
     tile_w = w / config.GRID_COLS
     assert tile_w / 2 > config.GATE_FRAC * w
+
+
+def _vertical(lm, frame=(640, 480)):
+    return gaze.features(lm, *frame)[2]
+
+
+def test_the_vertical_feature_ignores_the_eyelids():
+    """It used to divide by the eyelid gap and measure from the upper lid, so
+    it tracked the lid rather than the eye. On a real frame, moving only the
+    lids swung it 0.49 -- more than actually moving the eye did -- and the lid
+    descends with your gaze, so during calibration the two cancelled: vertical
+    correlated -0.32 with the vertical target where horizontal managed +0.96.
+    """
+    lm = synth_landmarks()
+    before = _vertical(lm)
+
+    lids = lm.copy()
+    for i in (159, 145, 386, 374):          # both lids of both eyes descend
+        lids[i, 1] += 0.01
+    assert _vertical(lids) == pytest.approx(before), "eyelids are not gaze"
+
+    squint = lm.copy()
+    for i in (159, 386):                    # upper lids alone: the eye narrows
+        squint[i, 1] += 0.012
+    assert _vertical(squint) == pytest.approx(before), "a squint is not gaze"
+
+
+def test_the_vertical_feature_does_follow_the_eye():
+    lm = synth_landmarks()
+    up, down = lm.copy(), lm.copy()
+    for i in (468, 473):
+        up[i, 1] -= 0.02
+        down[i, 1] += 0.02
+    assert _vertical(up) < _vertical(lm) < _vertical(down)
+
+
+def test_both_axes_share_one_rigid_denominator():
+    """The lid gap was four times smaller than the eye width, so whatever
+    vertical signal survived came out amplified into noise."""
+    lm = synth_landmarks()
+    moved = lm.copy()
+    for i in (468, 473):
+        moved[i, 0] += 0.02                 # horizontal move
+    dh = abs(gaze.features(moved, 640, 480)[0] - gaze.features(lm, 640, 480)[0])
+    moved = lm.copy()
+    for i in (468, 473):
+        moved[i, 1] += 0.02                 # same distance, vertical
+    dv = abs(_vertical(moved) - _vertical(lm))
+    assert dh == pytest.approx(dv, rel=0.5), "one axis must not out-shout the other"
