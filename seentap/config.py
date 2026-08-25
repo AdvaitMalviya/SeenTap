@@ -98,12 +98,10 @@ DRIFT_BAD_DEG = 5.0
 # screen edge. Retune it for a desktop monitor or a different working distance.
 SCREEN_HALF_TAN = 0.25
 DRIFT_MEDIAN_FRAMES = 30  # ~1 s; a single frame's solvePnP is far too jittery
-# The landmarker's own tracking filter needs time to settle. Fed identical
-# frames it wanders 4.3 degrees away from its eventual steady state before
-# converging, and takes about 130 frames to get within half a degree -- which
-# would light the badge red at session start for no reason at all. Report
-# nothing until it has calmed down. Afterwards it holds inside 0.5 degrees.
-DRIFT_WARMUP_FRAMES = 150
+# Enough frames to fill the median window. The old value of 150 was covering
+# for the VIDEO-mode tracker, which wandered 4.3 degrees over its first 130
+# frames; in IMAGE mode there is no such transient to wait out.
+DRIFT_WARMUP_FRAMES = DRIFT_MEDIAN_FRAMES
 REQUALIFY_POINTS = 5      # the smallest density; an affine wants three
 REQUALIFY_SETTLE_MS = 700
 REQUALIFY_COLLECT_MS = 900
@@ -119,6 +117,8 @@ VAD_AGGRESSIVENESS = 2
 # Bluetooth headset in its headset profile measured 16 here where the built-in
 # managed 167; webrtcvad found speech in none of it.
 MIC_QUIET_RMS = 60.0
+MIC_DEAD_RMS = 1.0        # below this the device is emitting digital silence
+MIC_PROBE_S = 0.4         # how long serve listens before trusting the default
 MIC_LEVEL_EVERY = 10      # frames between level updates: 30 ms each, so ~3/s
 WHISPER_MODEL = "base.en"
 WHISPER_COMPUTE = "int8"

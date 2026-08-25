@@ -221,21 +221,23 @@ def _newest_calib():
     and picking it would be worse than asking.
     """
     for path in sorted(glob.glob(f"{config.LOG_DIR}/calib-*.jsonl"), reverse=True):
-        F, _XY, version = _load_calib(path)
+        F, _XY, version, _d = _load_calib(path)
         if version == config.FEATURES_VERSION and len(F) >= 4:
             return path
     return None
 
 
 def _load_calib(path):
-    F, XY, version = [], [], 1
+    F, XY, version, density = [], [], 1, None
     for row in eventlog.read(path):
         if row.get("kind") == "calib_point":
             F.append(row["f"])
             XY.append(row["target"])
         elif row.get("kind") == "calibration":
             version = row.get("features_version", 1)
-    return np.asarray(F, dtype=float), np.asarray(XY, dtype=float), version
+            density = row.get("density")
+    F, XY = np.asarray(F, dtype=float), np.asarray(XY, dtype=float)
+    return F, XY, version, density or len(F)
 
 
 def _require_calib(path):
@@ -257,7 +259,7 @@ def _require_calib(path):
         bail("no calibration file given and none found")
     if not Path(path).exists():
         bail("does not exist")
-    F, XY, version = _load_calib(path)
+    F, XY, version, _density = _load_calib(path)
     if version != config.FEATURES_VERSION:
         bail(f"was recorded with feature layout v{version}, and this build uses "
              f"v{config.FEATURES_VERSION}",
@@ -272,14 +274,14 @@ def cmd_fit(args) -> int:
     """Study 1 and the day-8 gate, from saved calibration passes."""
     sessions, skipped = {}, []
     for path in sorted(glob.glob(args.pattern)):
-        F, XY, version = _load_calib(path)
+        F, XY, version, density = _load_calib(path)
         if version != config.FEATURES_VERSION or len(F) < 4:
             skipped.append(f"{path} (v{version}, {len(F)} points)")
             continue
-        # Keyed by density, and the newest wins: keying by point count silently
-        # dropped every earlier pass at the same density, so a second nine-point
-        # calibration replaced the first without saying so.
-        sessions[len(F)] = (F, XY, path)
+        # Keyed by the density that was asked for, not the number of points
+        # that survived: a nine-point run that lost four targets is a damaged
+        # nine, and filing it under "5" invented a density that was never run.
+        sessions[density] = (F, XY, path)
     if skipped:
         print("skipped:\n  " + "\n  ".join(skipped), file=sys.stderr)
     if not sessions:
@@ -287,7 +289,7 @@ def cmd_fit(args) -> int:
         return 1
 
     if args.held:
-        Fh, XYh, _ = _load_calib(args.held)
+        Fh, XYh, _v, _d = _load_calib(args.held)
         held, held_from = (Fh, XYh), args.held
     else:
         # Without a separate recording there is nothing held out, and scoring a
@@ -351,6 +353,26 @@ def cmd_fetch(args) -> int:
     return 0
 
 
+def _working_mic():  # pragma: no cover - needs a microphone
+    """Swap off the default input if it is delivering nothing at all."""
+    from seentap import speech
+
+    try:
+        rows = speech.input_levels(config.MIC_PROBE_S)
+    except Exception:
+        return None
+    if not rows:
+        return None
+    default = rows[0]
+    live = [r for r in rows if r["rms"] > config.MIC_DEAD_RMS and not r["error"]]
+    if default["rms"] > config.MIC_DEAD_RMS or not live:
+        return None
+    best = max(live, key=lambda r: r["rms"])
+    print(f"default input '{default['name']}' is silent (peak "
+          f"{default['rms']:.1f}); using [{best['index']}] {best['name']} instead")
+    return best["index"]
+
+
 def cmd_mic(args) -> int:  # pragma: no cover - needs a microphone
     """Which input devices exist and whether any of them can hear you."""
     from seentap import speech
@@ -408,7 +430,13 @@ def cmd_serve(args) -> int:  # pragma: no cover - needs a camera and a mic
     if args.condition != "C1":          # the gaze-only baseline needs no mic
         queue, stop = mp.Queue(maxsize=8), mp.Event()
         mic = speech.find_device(args.mic)
-        print(f"microphone: {'default' if mic is None else mic}"
+        if mic is None:
+            # A device returning exact digital silence is broken, not quiet: a
+            # Bluetooth headset in its headset profile measured 0.0 here while
+            # the built-in managed 462. Left alone it looks identical to a
+            # command that was not understood.
+            mic = _working_mic()
+        print(f"microphone: {'system default' if mic is None else mic}"
               f"   (run `python -m seentap.run mic` if nothing is heard)")
         mp.Process(target=speech.speech_worker, args=(queue, stop, mic),
                    daemon=True).start()

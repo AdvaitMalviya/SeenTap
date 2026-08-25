@@ -127,3 +127,31 @@ def test_no_calibration_at_all_is_a_message_not_a_crash(tmp_path, monkeypatch,
     with pytest.raises(SystemExit):
         run._require_calib(run._newest_calib())
     assert "calibrate --density 9" in capsys.readouterr().err
+
+
+def test_a_damaged_run_is_filed_under_the_density_it_asked_for(tmp_path):
+    """A nine-point pass that lost four targets is a damaged nine, not a five.
+    Keying by surviving point count invented a density row that was never run,
+    and its error landed in the table as if it were a real result."""
+    from seentap import config, eventlog, run
+
+    path = tmp_path / "calib-9-partial.jsonl"
+    with eventlog.EventLog(path) as log:
+        log.write("calibration", density=9,
+                  features_version=config.FEATURES_VERSION)
+        for i in range(5):
+            log.write("calib_point", f=[0.0] * 9, target=[i * 10.0, i * 10.0])
+
+    F, _XY, version, density = run._load_calib(str(path))
+    assert len(F) == 5 and density == 9
+    assert version == config.FEATURES_VERSION
+
+
+def test_a_file_with_no_header_falls_back_to_its_point_count(tmp_path):
+    from seentap import eventlog, run
+
+    path = tmp_path / "calib-headerless.jsonl"
+    with eventlog.EventLog(path) as log:
+        for i in range(7):
+            log.write("calib_point", f=[0.0] * 9, target=[float(i), float(i)])
+    assert run._load_calib(str(path))[3] == 7

@@ -151,10 +151,10 @@ nothing happened" in five seconds.
 python -m seentap.run mic
 ```
 
-It measures every input device while you speak and names the loudest. A
-Bluetooth headset switched into its headset profile measured 20 dB below the
-built-in microphone here — quiet enough that the voice detector found speech in
-none of it, with nothing anywhere saying so. Pass the winner as `--mic`.
+It measures every input device while you speak and names the loudest, and
+`serve` refuses to sit on a default input that is returning digital silence —
+a Bluetooth headset in its headset profile measured 0.0 here where the built-in
+managed 462. Pass a specific one as `--mic` if you want to choose.
 
 **4. Run it.**
 
@@ -269,7 +269,7 @@ per-participant plots beside any p-value, no population-level claim.
 python -m pytest -q
 ```
 
-219 tests, none of which need a camera or a microphone.
+223 tests, none of which need a camera or a microphone.
 `tests/test_end_to_end.py` drives a synthetic participant through the whole
 pipeline — fusion, execution, logging, replay, the sweep and the CLI.
 `tests/test_requalify.py` drives a requalification through the same WebSocket
@@ -302,6 +302,12 @@ portrait and skips if you have not fetched one.
   reported, rather than dropped. Dropping it would silently change the
   calibration density the fit was scored at, which is one of the things the
   evaluation compares.
+* Landmarks are detected in MediaPipe's **IMAGE mode, not VIDEO**. VIDEO
+  carries a temporal tracking filter that wanders on input which never
+  changes — 0.008 of horizontal eye ratio across 150 identical frames, the
+  same size as the between-target noise that was destroying calibration.
+  IMAGE mode measured exactly zero spread on the same input and costs half a
+  millisecond a frame, so the tracking shortcut buys nothing at 30 fps.
 * Calibration files carry a **feature-layout version**. Change what
   `features()` computes and every saved file becomes unreadable — the vectors
   are already extracted, so old ones would be silent nonsense rather than a

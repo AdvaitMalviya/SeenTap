@@ -68,3 +68,35 @@ def test_the_feature_vector_is_finite_and_shaped(detected):
     f = gaze.features(lm, w, h)
     assert f.shape == (9,) and np.all(np.isfinite(f))
     assert f[7] > 0, "interocular distance must be positive"
+
+
+def test_image_mode_is_deterministic_and_video_mode_is_not():
+    """Why calibration must not use VIDEO. Its temporal tracker wanders on
+    input that never changes -- measured, the horizontal eye ratio drifted
+    0.008 across 150 identical frames, the same size as the between-target
+    noise that was destroying every calibration. IMAGE mode is exactly stable
+    and costs half a millisecond a frame.
+    """
+    import cv2
+
+    rgb = cv2.cvtColor(cv2.imread(str(PORTRAIT)), cv2.COLOR_BGR2RGB)
+    spreads = {}
+    for video in (False, True):
+        tr = gaze.GazeTracker(camera=None, video=video)
+        try:
+            F = np.array([gaze.features(tr.detect(rgb), rgb.shape[1], rgb.shape[0])
+                          for _ in range(60)])
+        finally:
+            tr.close()
+        spreads[video] = float(np.ptp(F[:, 0]))
+
+    assert spreads[False] == 0.0, "IMAGE mode must be exactly reproducible"
+    assert spreads[True] > spreads[False]
+
+
+def test_the_tracker_defaults_to_image_mode():
+    tr = gaze.GazeTracker(camera=None)
+    try:
+        assert tr.video is False
+    finally:
+        tr.close()

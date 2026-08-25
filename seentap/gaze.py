@@ -334,7 +334,8 @@ class GazeTracker:
 
     def __init__(self, mapping=None, camera: int | None = 0,
                  screen=(config.SCREEN_W, config.SCREEN_H),
-                 model_path: str | None = None, f_ref: np.ndarray | None = None):
+                 model_path: str | None = None, f_ref: np.ndarray | None = None,
+                 video: bool = False):
         import mediapipe as mp
         from mediapipe.tasks import python as mp_python
         from mediapipe.tasks.python import vision
@@ -347,12 +348,21 @@ class GazeTracker:
                 # machine ("Check failed: service_ Service is unavailable"), and
                 # the report budgets for CPU inference anyway.
                 delegate=mp_python.BaseOptions.Delegate.CPU),
-            running_mode=vision.RunningMode.VIDEO,
+            # IMAGE, not VIDEO. VIDEO carries a temporal tracking filter, and
+            # on 150 identical frames it wanders: the horizontal eye ratio
+            # drifts 0.008 between the first and last thirty, which is the same
+            # size as the 0.016 of between-target noise that was destroying
+            # calibration. IMAGE mode returned exactly 0.00000 spread on the
+            # same input, and costs 0.5 ms a frame -- 250 fps against a 30 fps
+            # camera, so the tracking shortcut buys nothing here.
+            running_mode=(vision.RunningMode.VIDEO if video
+                          else vision.RunningMode.IMAGE),
             num_faces=1,
             min_face_detection_confidence=0.5,
             min_tracking_confidence=0.5,
         )
         self.landmarker = vision.FaceLandmarker.create_from_options(options)
+        self.video = video
 
         self.cap = None
         if camera is not None:
@@ -387,7 +397,8 @@ class GazeTracker:
         image = self.mp.Image(image_format=self.mp.ImageFormat.SRGB,
                               data=np.ascontiguousarray(rgb))
         self._frame_ms += 1
-        result = self.landmarker.detect_for_video(image, self._frame_ms)
+        result = (self.landmarker.detect_for_video(image, self._frame_ms)
+                  if self.video else self.landmarker.detect(image))
         if not result.face_landmarks:
             self.last_landmarks = None
             return None
