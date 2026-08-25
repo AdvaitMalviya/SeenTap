@@ -57,6 +57,10 @@ CALIB_SETTLE_MIN_S = 0.6   # never trust a fixation faster than this
 CALIB_SETTLE_MAX_S = 2.5   # ... and stop waiting for one after this
 CALIB_COLLECT_S = 1.0
 CALIB_ATTEMPTS = 3         # a target that will not settle is retried, then skipped
+CALIB_WINDOW_SETTLE_S = 2.5  # macOS animates into fullscreen and resizes the
+                             # view when it lands; measure only after that
+CALIB_DOT_PX = 8           # the dot you actually fixate
+CALIB_DOT_MAX_PX = 40      # ... shrinking to it over CALIB_SETTLE_MIN_S
 
 # --- the day-8 gate --------------------------------------------------------
 GATE_FRAC = 0.08          # of screen width; 121 px at 1512, 154 px at 1920
@@ -111,6 +115,11 @@ VAD_ONSET_FRAMES = 3      # 90 ms of voice declares onset
 VAD_OFFSET_FRAMES = 15    # 450 ms of silence declares offset
 VAD_PREROLL_MS = 200      # so the first consonant survives
 VAD_AGGRESSIVENESS = 2
+# Peak RMS below this and the microphone is not usefully hearing you. A
+# Bluetooth headset in its headset profile measured 16 here where the built-in
+# managed 167; webrtcvad found speech in none of it.
+MIC_QUIET_RMS = 60.0
+MIC_LEVEL_EVERY = 10      # frames between level updates: 30 ms each, so ~3/s
 WHISPER_MODEL = "base.en"
 WHISPER_COMPUTE = "int8"
 

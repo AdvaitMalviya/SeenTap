@@ -144,15 +144,31 @@ Scored against a **held-out** recording only if you pass one as `--held`.
 Without it the numbers are fitted errors, not accuracy, and `fit` says so
 rather than quietly flattering itself.
 
-**3. Run it.**
+**3. Check the microphone.** Optional, but it answers "I said a command and
+nothing happened" in five seconds.
 
 ```bash
-python -m seentap.run serve
+python -m seentap.run mic
+```
+
+It measures every input device while you speak and names the loudest. A
+Bluetooth headset switched into its headset profile measured 20 dB below the
+built-in microphone here — quiet enough that the voice detector found speech in
+none of it, with nothing anywhere saying so. Pass the winner as `--mic`.
+
+**4. Run it.**
+
+```bash
+python -m seentap.run serve                  # add --mic 3 if `mic` named one
 ```
 
 It uses the newest usable calibration and prints which one. Pass
 `--calibration <path>` to pick a different file; give it one that is not there
 and it says so and lists the ones that are.
+
+The dashboard's **mic** meter shows what the microphone is hearing — green
+while it has your voice. Without it a dead microphone and an unrecognised word
+are the same experience: you speak, and nothing happens either way.
 
 Open `127.0.0.1:8000`, look at a tile, say "click".
 
@@ -174,7 +190,7 @@ events and is meant for logged evaluation runs; during a demo a stray real
 click closes the application or hits the wrong window. The corner failsafe
 stays armed either way.
 
-**4. Analyse.**
+**5. Analyse.**
 
 ```bash
 python -m seentap.run sweep logs/session-<timestamp>.jsonl --plot sweep.png
@@ -188,6 +204,7 @@ python -m seentap.run report logs/
 | `fetch` | Download model weights. Once, then fully offline. |
 | `landmarks` | Live overlay of the indices the pipeline depends on. |
 | `calibrate` | One calibration pass at 5, 9 or 13 points. |
+| `mic` | List input devices and how loud each one hears you. |
 | `fit` | Accuracy table across densities and mappings, plus the gate. |
 | `serve` | The live system and its dashboard. |
 | `sweep` | Replay one session across the fusion parameter grid. |
@@ -252,7 +269,7 @@ per-participant plots beside any p-value, no population-level claim.
 python -m pytest -q
 ```
 
-217 tests, none of which need a camera or a microphone.
+219 tests, none of which need a camera or a microphone.
 `tests/test_end_to_end.py` drives a synthetic participant through the whole
 pipeline — fusion, execution, logging, replay, the sweep and the CLI.
 `tests/test_requalify.py` drives a requalification through the same WebSocket
@@ -274,6 +291,13 @@ portrait and skips if you have not fetched one.
 * Five points buy an **affine** correction: offset, scale and shear, which is
   what pose drift mostly looks like. A large change of posture deforms the
   mapping in ways an affine cannot express, and still wants a full pass.
+* The calibration window is drawn at the display's **backing scale**, because
+  OpenCV's macOS window draws an image one-to-one in device pixels — a canvas
+  sized in points covered a quarter of the screen inside a grey backdrop. Its
+  real bounds come from the window server, since `getWindowImageRect` only
+  echoes the image size back. The area excludes the menu bar, so targets are
+  logged at where they were actually drawn rather than where they were asked
+  for.
 * A target that will not settle after three attempts is **kept anyway** and
   reported, rather than dropped. Dropping it would silently change the
   calibration density the fit was scored at, which is one of the things the

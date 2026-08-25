@@ -209,3 +209,16 @@ def test_both_axes_share_one_rigid_denominator():
         moved[i, 1] += 0.02                 # same distance, vertical
     dv = abs(_vertical(moved) - _vertical(lm))
     assert dh == pytest.approx(dv, rel=0.5), "one axis must not out-shout the other"
+
+
+def test_backing_scale_is_a_sane_multiplier():
+    """OpenCV draws one-to-one in device pixels, so a canvas built in points
+    covers a quarter of a Retina screen. Everything hangs off this number."""
+    assert gaze.backing_scale() >= 1
+    assert isinstance(gaze.backing_scale(), int)
+
+
+def test_view_rect_falls_back_when_the_window_is_not_there():
+    """Headless, or any non-mac: the caller must still get usable geometry."""
+    fallback = (0, 0, 1512, 982)
+    assert gaze.view_rect("no such window at all", fallback) == fallback

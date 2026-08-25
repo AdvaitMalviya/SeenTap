@@ -23,6 +23,24 @@ class Segment:
 
 
 @dataclass
+class Level:
+    """A periodic 'the microphone is hearing this much', for the dashboard.
+
+    Without it a silent mic and an unrecognised word look identical from the
+    user's chair: you say a word and nothing happens either way.
+    """
+    rms: float
+    voiced: bool
+
+
+@dataclass
+class MicError:
+    """The worker is a daemon process. Anything it raises dies with it unless
+    it is handed back."""
+    message: str
+
+
+@dataclass
 class Utterance:
     onset_t: float
     offset_t: float
@@ -103,8 +121,69 @@ def transcribe(model, audio, vocab=None) -> str:
     return " ".join(s.text for s in segments).strip()
 
 
+def find_device(want):  # pragma: no cover - depends on the host's audio
+    """Resolve --mic: an index, or a case-insensitive name fragment."""
+    import sounddevice as sd
+
+    if want is None:
+        return None
+    if str(want).isdigit():
+        return int(want)
+    matches = [i for i, d in enumerate(sd.query_devices())
+               if d["max_input_channels"] > 0 and str(want).lower() in d["name"].lower()]
+    if not matches:
+        raise ValueError(f"no input device matching {want!r}")
+    return matches[0]
+
+
+def input_levels(seconds: float = 1.0):  # pragma: no cover - needs a microphone
+    """Every input device and how loud it is right now.
+
+    A Bluetooth headset switched into its headset profile can read 20 dB below
+    the built-in microphone, which is the difference between working and
+    silently doing nothing.
+    """
+    import numpy as np
+    import sounddevice as sd
+
+    frame_len = int(config.SAMPLE_RATE * config.VAD_FRAME_MS / 1000)
+    frames = max(1, int(seconds * 1000 / config.VAD_FRAME_MS))
+    out = []
+    for i, d in enumerate(sd.query_devices()):
+        if d["max_input_channels"] <= 0:
+            continue
+        try:
+            with sd.InputStream(samplerate=config.SAMPLE_RATE, channels=1,
+                                dtype="int16", blocksize=frame_len,
+                                device=i) as stream:
+                r = []
+                for _ in range(frames):
+                    block, _over = stream.read(frame_len)
+                    r.append(float(np.sqrt(np.mean(
+                        block[:, 0].astype(np.float64) ** 2))))
+            out.append({"index": i, "name": d["name"], "rms": float(np.max(r)),
+                        "error": None})
+        except Exception as e:
+            out.append({"index": i, "name": d["name"], "rms": 0.0,
+                        "error": f"{type(e).__name__}: {e}"})
+    return out
+
+
 def speech_worker(out_queue, stop_event, device=None) -> None:  # pragma: no cover
     """Process target: capture -> VAD -> Whisper -> Utterance on the queue."""
+    try:
+        _speech_worker(out_queue, stop_event, device)
+    except Exception as e:
+        # Daemon process: without this the traceback vanishes with it and the
+        # microphone simply never works, with nothing said anywhere.
+        try:
+            out_queue.put(MicError(f"{type(e).__name__}: {e}"))
+        except Exception:
+            pass
+        raise
+
+
+def _speech_worker(out_queue, stop_event, device=None) -> None:  # pragma: no cover
     import time
 
     import numpy as np
@@ -118,6 +197,7 @@ def speech_worker(out_queue, stop_event, device=None) -> None:  # pragma: no cov
     model = load_model()
     ring: list[np.ndarray] = []
     current: list[np.ndarray] = []
+    since_level = 0
 
     with sd.InputStream(samplerate=config.SAMPLE_RATE, channels=1, dtype="int16",
                         blocksize=frame_len, device=device) as stream:
@@ -130,6 +210,12 @@ def speech_worker(out_queue, stop_event, device=None) -> None:  # pragma: no cov
             if seg.speaking:
                 current.append(frame)
             voiced = vad.is_speech(frame.tobytes(), config.SAMPLE_RATE)
+            since_level += 1
+            if since_level >= config.MIC_LEVEL_EVERY:
+                since_level = 0
+                rms = float(np.sqrt(np.mean(frame.astype(np.float64) ** 2)))
+                if not out_queue.full():          # utterances have right of way
+                    out_queue.put(Level(rms=rms, voiced=bool(voiced)))
             was = seg.speaking
             done = seg.push(voiced, t)
             if not was and seg.speaking:

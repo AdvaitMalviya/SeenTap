@@ -14,6 +14,15 @@
   .badge b{color:var(--accent);font-weight:600}
   #state{border-color:var(--accent)}
   .drift-ok{color:var(--ok)} .drift-warn{color:var(--warn)} .drift-bad{color:var(--bad)}
+  /* Mic meter: a silent microphone and an unheard word are the same
+     experience without it -- you speak and nothing happens either way. */
+  #mic{display:inline-flex;align-items:center;gap:7px}
+  #mic .bar{width:64px;height:6px;background:var(--line);border-radius:3px;
+            overflow:hidden}
+  #mic .fill{height:100%;width:0;background:var(--dim);border-radius:3px;
+             transition:width .12s linear}
+  #mic.hot .fill{background:var(--ok)} #mic.quiet .fill{background:var(--warn)}
+  #mic.dead .fill{background:var(--bad)}
   main{display:grid;grid-template-columns:1fr 320px;gap:14px;padding:14px;
        align-items:start}
   @media (max-width:900px){main{grid-template-columns:1fr}}
@@ -70,6 +79,9 @@
   <span class="badge">exec <b id="exec">—</b></span>
   <span class="badge">drift <b id="drift">—</b></span>
   <span class="badge">gate refusals <b id="refusals">0</b></span>
+  <span class="badge" id="mic" title="microphone level">mic
+    <span class="bar"><span class="fill" id="mic-fill"></span></span>
+    <b id="mic-label">—</b></span>
   <span class="badge">decode <b id="decode">— ms</b></span>
   <span class="badge dim">r = requalify</span>
 </header>
@@ -100,7 +112,17 @@
 const canvas = document.getElementById("desk");
 const ctx = canvas.getContext("2d");
 let cfg = {cols:4, rows:3, w:1512, h:982};
-let gaze = null, lastAction = null, trail = [];
+let gaze = null, lastAction = null, trail = [], micSeen = false;
+
+// No level updates at all means the worker never started -- a different
+// failure from a microphone that is merely quiet, and worth saying so.
+setTimeout(() => {
+  if (micSeen || !cfg.needs_mic) return;
+  document.getElementById("mic").className = "badge dead";
+  document.getElementById("mic-label").textContent = "no signal";
+  push("transcript", "no audio from the speech process — try "
+       + "`python -m seentap.run mic`", "refused");
+}, 15000);
 
 function draw(){
   const {w,h,cols,rows} = cfg;
@@ -222,6 +244,20 @@ ws.onmessage = (ev) => {
     d.className = m.drift_deg == null ? "" :
       m.drift_deg < cfg.drift_warn ? "drift-ok" :
       m.drift_deg < cfg.drift_bad ? "drift-warn" : "drift-bad";
+  } else if (m.kind === "mic"){
+    const box = document.getElementById("mic");
+    if (m.error){
+      box.className = "badge dead";
+      document.getElementById("mic-label").textContent = "failed";
+      push("transcript", "microphone: " + m.error, "refused");
+    } else {
+      micSeen = true;
+      const frac = Math.min(1, m.rms / (m.floor * 4));
+      document.getElementById("mic-fill").style.width = (frac * 100) + "%";
+      box.className = "badge " + (m.voiced ? "hot" : m.rms >= m.floor ? "" : "quiet");
+      document.getElementById("mic-label").textContent =
+        m.voiced ? "hearing you" : m.rms >= m.floor ? "on" : "too quiet";
+    }
   } else if (m.kind === "state"){
     document.querySelector("#state b").textContent = m.state;
     document.getElementById("refusals").textContent = m.gate_refusals;

@@ -266,6 +266,52 @@ def zone_rect(zone: int, w: int = config.SCREEN_W, h: int = config.SCREEN_H,
     return col * tw, row * th, (col + 1) * tw, (row + 1) * th
 
 
+def backing_scale() -> int:
+    """Device pixels per logical point. 2 on a Retina display.
+
+    OpenCV's macOS window draws an image one-to-one in device pixels, so a
+    canvas built in points covers only half the screen in each direction and
+    sits inside a grey backdrop -- measured, a 1512x982 canvas produced a view
+    756x491 points wide, positioned off the bottom of the screen.
+    """
+    try:
+        from Quartz import (CGDisplayCopyDisplayMode, CGDisplayModeGetPixelWidth,
+                            CGDisplayModeGetWidth, CGMainDisplayID)
+
+        mode = CGDisplayCopyDisplayMode(CGMainDisplayID())
+        pts = CGDisplayModeGetWidth(mode)
+        return max(1, round(CGDisplayModeGetPixelWidth(mode) / pts)) if pts else 1
+    except Exception:
+        return 1
+
+
+def view_rect(window_name: str, fallback):
+    """Where a window's content actually sits, in screen points.
+
+    cv2.getWindowImageRect is no help: it echoes the image size back, reporting
+    2400 wide for a 2400px canvas on a 1512px screen. The window server knows.
+    """
+    try:
+        import os
+
+        from Quartz import (CGWindowListCopyWindowInfo, kCGNullWindowID,
+                            kCGWindowListOptionOnScreenOnly)
+
+        pid = os.getpid()
+        for w in CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly,
+                                            kCGNullWindowID):
+            if (w.get("kCGWindowOwnerPID") == pid
+                    and w.get("kCGWindowName") == window_name):
+                b = w["kCGWindowBounds"]
+                r = (round(b["X"]), round(b["Y"]),
+                     round(b["Width"]), round(b["Height"]))
+                if r[2] >= 320 and r[3] >= 240:
+                    return r
+    except Exception:
+        pass
+    return fallback
+
+
 def ensure_model(path: str | None = None) -> str:
     """Fetch face_landmarker.task once. Day 0 work, so the demo never needs
     the network."""

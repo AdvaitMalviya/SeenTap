@@ -129,6 +129,21 @@ class Runtime:
                 await self._execute("select", sample.x, sample.y, picked,
                                     n=1, onset_t=sample.t)
 
+    async def on_audio(self, item) -> None:
+        """One item off the speech queue. Not everything on it is a command."""
+        from seentap.speech import Level, MicError
+
+        if isinstance(item, Level):
+            await hub.send({"kind": "mic", "rms": item.rms,
+                            "voiced": item.voiced,
+                            "floor": config.MIC_QUIET_RMS})
+            return
+        if isinstance(item, MicError):
+            self.log.write("mic_error", message=item.message)
+            await hub.send({"kind": "mic", "error": item.message})
+            return
+        await self.on_utterance(item)
+
     async def on_utterance(self, utt) -> None:
         self.log.write("utterance", t=utt.onset_t, onset_t=utt.onset_t,
                        offset_t=utt.offset_t, text=utt.text,
@@ -271,6 +286,7 @@ async def socket(ws: WebSocket) -> None:
         "mode": runtime.mode if runtime else "B",
         "executor": type(runtime.executor).__name__ if runtime else "SimExecutor",
         "drift_warn": config.DRIFT_WARN_DEG, "drift_bad": config.DRIFT_BAD_DEG,
+        "needs_mic": runtime.condition != "C1" if runtime else True,
     }))
     try:
         while True:
@@ -300,5 +316,5 @@ async def pump(tracker, speech_queue, rt: Runtime, stop: asyncio.Event) -> None:
         if sample is not None:
             await rt.on_gaze(sample)
         while speech_queue is not None and not speech_queue.empty():
-            await rt.on_utterance(speech_queue.get())
+            await rt.on_audio(speech_queue.get())
         await asyncio.sleep(0)

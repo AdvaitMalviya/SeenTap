@@ -74,20 +74,49 @@ def cmd_calibrate(args) -> int:  # pragma: no cover - needs a camera
     """
     import cv2
 
+    from seentap import gaze as G
+
     w, h = config.SCREEN_W, config.SCREEN_H
-    pts = calibrate.targets(args.density, w, h)
     tr = _tracker()
     win = "seentap calibration"
-    cv2.namedWindow(win, cv2.WND_PROP_FULLSCREEN)
+    # FREERATIO, and a canvas in device pixels. OpenCV's macOS window draws an
+    # image one-to-one in device pixels, so a canvas sized in points covers a
+    # quarter of a Retina screen inside a grey backdrop: measured, a 1512x982
+    # canvas gave a view 756x491 points, pushed off the bottom of the screen.
+    scale = G.backing_scale()
+    cv2.namedWindow(win, cv2.WINDOW_NORMAL | cv2.WINDOW_FREERATIO)
     cv2.setWindowProperty(win, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-    canvas = np.zeros((h, w, 3), np.uint8)
+
+    def measure():
+        """The view's real bounds in screen points, once macOS has settled.
+
+        cv2.getWindowImageRect is no use -- it echoes the image size back --
+        so this asks the window server, which is also the only way to notice
+        the resize that lands a second or two after the fullscreen animation.
+        """
+        return G.view_rect(win, (0, 0, w, h))
+
+    blank = np.zeros((h * scale, w * scale, 3), np.uint8)
+    t_settle = time.monotonic() + config.CALIB_WINDOW_SETTLE_S
+    while time.monotonic() < t_settle:
+        cv2.imshow(win, blank)
+        cv2.waitKey(30)
+    rect = measure()
+    print(f"drawing area: {rect[2]}x{rect[3]} points at ({rect[0]},{rect[1]}), "
+          f"canvas {scale}x for a {scale}x display")
+
+    fracs = calibrate.targets(args.density, 1.0, 1.0)     # positions as fractions
+    canvas = np.zeros((rect[3] * scale, rect[2] * scale, 3), np.uint8)
 
     def show(tx, ty, radius, colour, note):
         canvas[:] = 0
-        cv2.circle(canvas, (int(tx), int(ty)), radius, colour, -1)
+        cv2.circle(canvas, (int(tx * scale), int(ty * scale)),
+                   radius * scale, colour, -1)
         if note:
-            cv2.putText(canvas, note, (int(w * 0.5) - 250, int(h * 0.92)),
-                        cv2.FONT_HERSHEY_PLAIN, 2.0, (110, 110, 120), 2)
+            cv2.putText(canvas, note,
+                        (canvas.shape[1] // 2 - 250 * scale,
+                         int(canvas.shape[0] * 0.92)),
+                        cv2.FONT_HERSHEY_PLAIN, 2.0 * scale, (110, 110, 120), 2)
         cv2.imshow(win, canvas)
         return cv2.waitKey(1) & 0xFF == ord("q")
 
@@ -98,10 +127,16 @@ def cmd_calibrate(args) -> int:  # pragma: no cover - needs a camera
         while True:
             now = time.monotonic()
             if settled is None:
-                frac = max(0.0, 1 - (now - t0) / config.CALIB_SETTLE_MAX_S)
-                quit_ = show(tx, ty, int(6 + 34 * frac), (60, 160, 255), note)
+                # Shrink over the minimum hold, then sit at the collect size:
+                # scaling it to the maximum instead meant the dot was still
+                # halfway down when the eye settled and the change to green
+                # arrived as a jump.
+                frac = max(0.0, 1 - (now - t0) / config.CALIB_SETTLE_MIN_S)
+                r = config.CALIB_DOT_PX + int(
+                    (config.CALIB_DOT_MAX_PX - config.CALIB_DOT_PX) * frac)
+                quit_ = show(tx, ty, r, (60, 160, 255), note)
             else:
-                quit_ = show(tx, ty, 8, (90, 230, 120), note)
+                quit_ = show(tx, ty, config.CALIB_DOT_PX, (90, 230, 120), note)
             if quit_:
                 return None, None, None
             f, blink, _ = tr.read_raw(eventlog.now())
@@ -127,8 +162,20 @@ def cmd_calibrate(args) -> int:  # pragma: no cover - needs a camera
     kept, shaky, open_ears = 0, 0, []
     with eventlog.EventLog(out) as log:
         log.write("calibration", density=args.density, screen=[w, h],
+                  window=list(rect), scale=scale,
                   features_version=config.FEATURES_VERSION)
-        for (tx, ty) in pts:
+        for (fx, fy) in fracs:
+            now_rect = measure()
+            if now_rect != rect:
+                # The window moved under us. Points already recorded keep the
+                # screen coordinates they were actually drawn at, so only the
+                # remaining ones need the new geometry.
+                print(f"  window changed to {now_rect}; adapting")
+                rect = now_rect
+                canvas = np.zeros((rect[3] * scale, rect[2] * scale, 3), np.uint8)
+                log.write("calibration_window", window=list(rect))
+            rx, ry, rw, rh = rect
+            tx, ty = fx * rw, fy * rh
             for attempt in range(config.CALIB_ATTEMPTS):
                 note = "" if attempt == 0 else "hold still and follow the dot"
                 samples, ears, spread = capture(tx, ty, note)
@@ -147,7 +194,10 @@ def cmd_calibrate(args) -> int:  # pragma: no cover - needs a camera
                 print(f"  ({tx:.0f},{ty:.0f}): never settled "
                       f"(spread {spread:.3f} > {config.CALIB_STEADY}), kept anyway")
             open_ears.extend(ears)
-            log.write("calib_point", f=med.tolist(), target=[tx, ty],
+            # Logged in screen coordinates, which is the space the mapping
+            # predicts in; the dot was drawn in window coordinates.
+            log.write("calib_point", f=med.tolist(),
+                      target=[rx + tx, ry + ty],
                       n_raw=len(samples), steadiness=spread)
             kept += 1
         # The eyes were held open on a target for a second per point, so the
@@ -159,7 +209,7 @@ def cmd_calibrate(args) -> int:  # pragma: no cover - needs a camera
               f"(from {len(open_ears)} open-eye frames)")
     tr.close()
     cv2.destroyAllWindows()
-    print(f"{kept}/{len(pts)} targets captured"
+    print(f"{kept}/{len(fracs)} targets captured"
           + (f", {shaky} never settled" if shaky else "") + f" -> {out}")
     return 0 if kept >= 4 else 1
 
@@ -301,6 +351,33 @@ def cmd_fetch(args) -> int:
     return 0
 
 
+def cmd_mic(args) -> int:  # pragma: no cover - needs a microphone
+    """Which input devices exist and whether any of them can hear you."""
+    from seentap import speech
+
+    print(f"speak now -- measuring each input for {args.seconds:.0f}s\n")
+    rows = speech.input_levels(args.seconds)
+    if not rows:
+        print("no input devices at all", file=sys.stderr)
+        return 1
+    for r in rows:
+        if r["error"]:
+            print(f"  [{r['index']}] {r['name'][:38]:38} unusable: {r['error']}")
+            continue
+        db = 20 * np.log10(max(r["rms"], 1) / 32768)
+        ok = r["rms"] >= config.MIC_QUIET_RMS
+        print(f"  [{r['index']}] {r['name'][:38]:38} peak {r['rms']:7.1f} "
+              f"({db:5.0f} dBFS)  {'ok' if ok else 'too quiet'}")
+    best = max(rows, key=lambda r: r["rms"])
+    if best["rms"] < config.MIC_QUIET_RMS:
+        print("\nNothing heard you. Grant Microphone to your terminal in System "
+              "Settings > Privacy & Security, and speak while this runs.")
+        return 1
+    print(f"\nloudest: [{best['index']}] {best['name']}\n"
+          f"  python -m seentap.run serve --mic {best['index']}")
+    return 0
+
+
 def cmd_serve(args) -> int:  # pragma: no cover - needs a camera and a mic
     import multiprocessing as mp
 
@@ -330,7 +407,10 @@ def cmd_serve(args) -> int:  # pragma: no cover - needs a camera and a mic
     queue, stop = None, None
     if args.condition != "C1":          # the gaze-only baseline needs no mic
         queue, stop = mp.Queue(maxsize=8), mp.Event()
-        mp.Process(target=speech.speech_worker, args=(queue, stop),
+        mic = speech.find_device(args.mic)
+        print(f"microphone: {'default' if mic is None else mic}"
+              f"   (run `python -m seentap.run mic` if nothing is heard)")
+        mp.Process(target=speech.speech_worker, args=(queue, stop, mic),
                    daemon=True).start()
 
     server.configure(tracker, queue, rt)
@@ -421,6 +501,8 @@ def main(argv=None) -> int:
     s = sub.add_parser("serve", help="live system and dashboard")
     s.add_argument("--calibration",
                    help="default: the newest logs/calib-*.jsonl")
+    s.add_argument("--mic", help="input device index or name fragment; "
+                                 "default is whatever the OS calls default")
     s.add_argument("--mapping", default="poly", choices=list(calibrate.FITTERS))
     s.add_argument("--mode", default="B", choices=["A", "B"])
     s.add_argument("--condition", default="C3", choices=list(config.CONDITIONS))
@@ -432,6 +514,10 @@ def main(argv=None) -> int:
     s.add_argument("--aggregator", default="median")
     s.add_argument("--min-samples", type=int, default=5, dest="min_samples")
     s.set_defaults(fn=cmd_serve)
+
+    mi = sub.add_parser("mic", help="list input devices and how loud they are")
+    mi.add_argument("--seconds", type=float, default=1.5)
+    mi.set_defaults(fn=cmd_mic)
 
     w = sub.add_parser("sweep", help="replay one session across the grid")
     w.add_argument("session")
