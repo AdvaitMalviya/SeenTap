@@ -45,12 +45,44 @@ class SimExecutor(_Base):
         self.events.append({"verb": verb, "x": x, "y": y})
 
 
-class RealExecutor(_Base):
-    """Injects into the host OS. Used for logged evaluation runs only."""
+def can_post_events() -> bool | None:
+    """Whether this process may inject clicks. None if it cannot be determined.
 
-    def __init__(self):
+    Without Accessibility permission every synthetic click is discarded in
+    silence -- no error, no exception, nothing in the log -- which is
+    indistinguishable from gaze landing in the wrong place. macOS never prompts
+    for it on its own the way it does for the camera and the microphone.
+    """
+    try:
+        from Quartz import CGPreflightPostEventAccess
+
+        return bool(CGPreflightPostEventAccess())
+    except Exception:
+        return None
+
+
+class PermissionError_(RuntimeError):
+    """Accessibility is not granted, so injected clicks would vanish."""
+
+
+class RealExecutor(_Base):
+    """Injects into the host OS. Drives any window, not just the dashboard."""
+
+    def __init__(self, require_permission: bool = True):
         super().__init__()
         import pyautogui
+
+        if require_permission and can_post_events() is False:
+            try:
+                from Quartz import CGRequestPostEventAccess
+
+                CGRequestPostEventAccess()      # raises the system prompt once
+            except Exception:
+                pass
+            raise PermissionError_(
+                "Accessibility is not granted, so injected clicks would be "
+                "silently discarded. Add your terminal under System Settings > "
+                "Privacy & Security > Accessibility, then restart it.")
 
         pyautogui.FAILSAFE = True      # second line of defence: slam to a corner
         pyautogui.PAUSE = 0.0

@@ -160,6 +160,14 @@ AGGREGATOR_SWEEP = ("last", "mean", "median", "centroid", "zone_mode")
 MIN_SAMPLES_SWEEP = (3, 5, 8)
 BUFFER_SECONDS = 3.0
 
+# --- the on-screen gaze cursor ---------------------------------------------
+# Feedback is not decoration here. A webcam gaze estimate carries a standing
+# offset no fit removes; shown a dot, the user looks slightly off until it
+# lands where they want, and the offset stops mattering.
+OVERLAY_DOT_PX = 16       # radius
+OVERLAY_FPS = 60
+OVERLAY_FLASH_S = 0.45    # how long the ring marks where a command landed
+
 # --- baselines -------------------------------------------------------------
 DWELL_MS = 800            # C1, set above a natural reading fixation
 

@@ -48,5 +48,29 @@ def test_cancel_clears_a_pending_drag():
 def test_real_executor_keeps_the_corner_failsafe_armed():
     """Second line of defence behind the simulated desktop."""
     pyautogui = pytest.importorskip("pyautogui")
-    actions.RealExecutor()
+    # The permission gate is the host's business, not this assertion's.
+    actions.RealExecutor(require_permission=False)
     assert pyautogui.FAILSAFE is True
+
+
+def test_missing_accessibility_is_refused_rather_than_swallowed(monkeypatch):
+    """Without it macOS discards every injected click in silence -- no error,
+    no exception, nothing logged -- which looks exactly like gaze landing in
+    the wrong place. It never prompts on its own either."""
+    pytest.importorskip("pyautogui")
+    monkeypatch.setattr(actions, "can_post_events", lambda: False)
+    with pytest.raises(actions.PermissionError_, match="Accessibility"):
+        actions.RealExecutor()
+
+
+def test_permission_granted_constructs_normally(monkeypatch):
+    pytest.importorskip("pyautogui")
+    monkeypatch.setattr(actions, "can_post_events", lambda: True)
+    assert actions.RealExecutor().dragging is False
+
+
+def test_an_undetectable_permission_state_does_not_block(monkeypatch):
+    """Not macOS, or Quartz missing: refusing to run would be worse."""
+    pytest.importorskip("pyautogui")
+    monkeypatch.setattr(actions, "can_post_events", lambda: None)
+    assert actions.RealExecutor() is not None

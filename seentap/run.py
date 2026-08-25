@@ -405,7 +405,7 @@ def cmd_serve(args) -> int:  # pragma: no cover - needs a camera and a mic
 
     import uvicorn
 
-    from seentap import server, speech
+    from seentap import actions, overlay, server, speech
     from seentap.fusion import FusionConfig
 
     cfg = FusionConfig(lead_ms=args.lead, window_ms=args.window,
@@ -423,8 +423,28 @@ def cmd_serve(args) -> int:  # pragma: no cover - needs a camera and a mic
             tracker.blink_ear = row["value"]
             print(f"blink threshold: {tracker.blink_ear:.3f} (from calibration)")
 
-    rt = server.Runtime(cfg, mode=args.mode, real=args.real,
-                        condition=args.condition, tracker=tracker)
+    # On by default with --real: injecting clicks into other people's windows
+    # while the user cannot see where the system thinks they are looking is the
+    # one combination that has no defence.
+    want_overlay = args.overlay or (args.real and not args.no_overlay)
+    ov_queue = ov_stop = None
+    if want_overlay:
+        ov_queue, ov_stop = mp.Queue(maxsize=2), mp.Event()
+        mp.Process(target=overlay.overlay_worker, args=(ov_queue, ov_stop),
+                   daemon=True).start()
+        print("gaze cursor: on (look slightly off until the dot lands, then speak)")
+
+    try:
+        rt = server.Runtime(cfg, mode=args.mode, real=args.real,
+                            condition=args.condition, tracker=tracker,
+                            overlay=ov_queue)
+    except actions.PermissionError_ as e:
+        # Up front, not at the first click that quietly does nothing.
+        print(e, file=sys.stderr)
+        if ov_stop is not None:
+            ov_stop.set()
+        tracker.close()
+        return 2
 
     queue, stop = None, None
     if args.condition != "C1":          # the gaze-only baseline needs no mic
@@ -442,14 +462,18 @@ def cmd_serve(args) -> int:  # pragma: no cover - needs a camera and a mic
                    daemon=True).start()
 
     server.configure(tracker, queue, rt)
+    if args.real:
+        print("REAL clicks are armed -- slam the pointer into a screen corner "
+              "to abort")
     print(f"dashboard: open a browser on 127.0.0.1:{args.port}")
     print("say 'recalibrate' or press r on the dashboard if gaze drifts")
     try:
         uvicorn.run(server.app, host="127.0.0.1", port=args.port,
                     log_level="warning")
     finally:
-        if stop is not None:
-            stop.set()
+        for ev in (stop, ov_stop):
+            if ev is not None:
+                ev.set()
         tracker.close()
         rt.close()
     return 0
@@ -536,6 +560,10 @@ def main(argv=None) -> int:
     s.add_argument("--condition", default="C3", choices=list(config.CONDITIONS))
     s.add_argument("--real", action="store_true",
                    help="inject real OS events instead of the simulated desktop")
+    s.add_argument("--overlay", action="store_true",
+                   help="draw the gaze cursor over every window (implied by --real)")
+    s.add_argument("--no-overlay", action="store_true",
+                   help="suppress the gaze cursor even with --real")
     s.add_argument("--port", type=int, default=8000)
     s.add_argument("--lead", type=int, default=200)
     s.add_argument("--window", type=int, default=300)

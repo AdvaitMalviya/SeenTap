@@ -185,10 +185,37 @@ correction fitted on top of the existing mapping, and the old mapping kept
 untouched if the new points do not clear the accuracy gate. The session keeps
 running throughout — gaze never stops streaming.
 
+### Driving any window, not just the dashboard
+
+```bash
+python -m seentap.run serve --real
+```
+
 Actions land on a simulated desktop by default. `--real` injects genuine OS
-events and is meant for logged evaluation runs; during a demo a stray real
-click closes the application or hits the wrong window. The corner failsafe
-stays armed either way.
+mouse events at screen coordinates, so it drives whatever is in front of you —
+a browser, an editor, the Finder. Nothing about it is tied to the dashboard;
+`--mode` only changes what the dashboard draws. Slam the pointer into a screen
+corner to abort. Grant **Accessibility** first: macOS discards every injected
+click in silence without it, and never prompts on its own the way it does for
+the camera. `serve --real` checks before it starts and refuses with
+instructions rather than letting you discover it one dead click at a time.
+
+`--real` turns on the **gaze cursor**: a click-through dot drawn above every
+window, blue when a command would be accepted and amber when the gate is
+refusing, with a green ring marking where one landed. It is not decoration. A
+webcam gaze estimate carries a standing offset that no amount of fitting
+removes, and aiming blind at a target you cannot see yourself missing is
+hopeless. Shown the dot, you look slightly off until it sits where you want and
+then speak — which turns an accuracy problem into a much smaller steadiness
+one. Every practical gaze interface leans on that. `--overlay` enables it
+without real clicks; `--no-overlay` suppresses it.
+
+Be realistic about target size. A dashboard tile is 378×327 px and dwarfs the
+tracker's error; a web link is about 100×20 px, which is smaller than the error
+even at the 8% gate this project calls a pass. The cursor closes much of that
+gap because you steer it, but small targets in dense interfaces remain the hard
+case, and nothing here magnifies the screen or snaps to UI elements — both
+need permissions and frameworks the project does not carry.
 
 **5. Analyse.**
 
@@ -218,12 +245,17 @@ webcam ──> gaze.py ──────> GazeSample ──┐
            9-D features, One Euro,      │    bind() + state machine
            drift vs calibration pose)   │
 mic ─────> speech.py ────> Utterance ───┘         │
-          (VAD, Whisper, own process)             └──> eventlog.py ──> replay.py
+          (VAD, Whisper, own process)             ├──> eventlog.py ──> replay.py
+                                                  └──> overlay.py
+                                                       (gaze cursor, own process)
 
 "recalibrate" / r ──> calibrate.py ──> new mapping ──> gaze.py
                       (five points, affine correction,
                        refused if it misses the gate)
 ```
+
+The gaze cursor is a third process, for a different reason: AppKit wants the
+main thread and its own run loop, and the server already owns one.
 
 Landmark inference and speech decoding are both CPU-bound and will fight if
 left in one thread; the visible symptom is the cursor stuttering at the exact
@@ -269,7 +301,7 @@ per-participant plots beside any p-value, no population-level claim.
 python -m pytest -q
 ```
 
-223 tests, none of which need a camera or a microphone.
+236 tests, none of which need a camera, a microphone or a display.
 `tests/test_end_to_end.py` drives a synthetic participant through the whole
 pipeline — fusion, execution, logging, replay, the sweep and the CLI.
 `tests/test_requalify.py` drives a requalification through the same WebSocket

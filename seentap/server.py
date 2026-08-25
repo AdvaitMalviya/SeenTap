@@ -99,9 +99,10 @@ class Runtime:
 
     def __init__(self, cfg: FusionConfig = None, mode: str = "B",
                  real: bool = False, condition: str = "C3",
-                 log_path: str | None = None, tracker=None):
+                 log_path: str | None = None, tracker=None, overlay=None):
         self.fusion = Fusion(cfg or FusionConfig())
         self.tracker = tracker
+        self.overlay = overlay
         self._requalifying = False
         self._task = None
         self.mode = mode
@@ -123,11 +124,22 @@ class Runtime:
         await hub.send({"kind": "gaze", "x": sample.x, "y": sample.y,
                         "zone": sample.zone, "conf": sample.conf,
                         "drift_deg": sample.drift_deg})
+        self._to_overlay(x=sample.x, y=sample.y,
+                         armed=self.fusion.state in ("armed", "cooldown"))
         if self.condition == "C1":                    # gaze-only baseline
             picked = self.dwell.update(sample.zone, sample.t)
             if picked is not None:
                 await self._execute("select", sample.x, sample.y, picked,
                                     n=1, onset_t=sample.t)
+
+    def _to_overlay(self, **msg) -> None:
+        """Newest position wins; a backed-up queue would show stale gaze."""
+        if self.overlay is None:
+            return
+        try:
+            self.overlay.put_nowait(msg)
+        except Exception:
+            pass
 
     async def on_audio(self, item) -> None:
         """One item off the speech queue. Not everything on it is a command."""
@@ -248,6 +260,8 @@ class Runtime:
             ok, reason = True, ""
         except (ActionError, ValueError) as e:
             ok, reason = False, str(e)
+        if ok:
+            self._to_overlay(x=x, y=y, armed=True, fired=True)
         self.log.write("action", ok=ok, reason=reason, verb=verb, x=x, y=y,
                        zone=zone, n=n, onset_t=onset_t)
         await hub.send({"kind": "action", "ok": ok, "reason": reason,
