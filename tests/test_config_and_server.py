@@ -29,3 +29,44 @@ def test_dashboard_html_exists_and_is_self_contained():
     html = server.INDEX.read_text()
     assert "<canvas" in html
     assert "http://" not in html and "https://" not in html, "no external assets"
+
+
+def test_a_mistyped_calibration_path_says_so_and_lists_what_there_is(tmp_path,
+                                                                     capsys,
+                                                                     monkeypatch):
+    """It used to surface forty frames down inside sklearn as 'Expected 2D
+    array, got 1D array instead: array=[]', which names nothing useful."""
+    import pytest
+
+    from seentap import config, eventlog, run
+
+    monkeypatch.setattr(config, "LOG_DIR", str(tmp_path))
+    with eventlog.EventLog(tmp_path / "calib-9-1787629345.jsonl") as log:
+        for i in range(9):
+            log.write("calib_point", f=[0.0] * 9, target=[i * 10.0, i * 10.0])
+
+    with pytest.raises(SystemExit) as e:
+        run._require_calib(str(tmp_path / "calib-9-1758100000.jsonl"))
+    assert e.value.code == 2
+    err = capsys.readouterr().err
+    assert "does not exist" in err
+    assert "calib-9-1787629345.jsonl" in err, "point at the file they do have"
+
+    F, XY = run._require_calib(str(tmp_path / "calib-9-1787629345.jsonl"))
+    assert len(F) == 9
+
+
+def test_a_real_but_useless_calibration_file_is_refused_too(tmp_path, capsys,
+                                                           monkeypatch):
+    import pytest
+
+    from seentap import config, eventlog, run
+
+    monkeypatch.setattr(config, "LOG_DIR", str(tmp_path))
+    path = tmp_path / "calib-9-1.jsonl"
+    with eventlog.EventLog(path) as log:
+        log.write("calib_point", f=[0.0] * 9, target=[1.0, 1.0])
+
+    with pytest.raises(SystemExit):
+        run._require_calib(str(path))
+    assert "1 calibration point(s)" in capsys.readouterr().err

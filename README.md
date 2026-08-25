@@ -136,12 +136,13 @@ three mapping types, with a pass/fail verdict against 8% of screen width.
 **3. Run it.**
 
 ```bash
-python -m seentap.run serve --calibration logs/calib-9-1758100000.jsonl
+ls logs/calib-*.jsonl                      # your file, with its own timestamp
+python -m seentap.run serve --calibration logs/calib-9-<your-timestamp>.jsonl
 ```
 
-Open `127.0.0.1:8000`, look at a tile, say "click". Use the real filename —
-`--calibration` takes one path, so a `*` glob only works when exactly one file
-matches.
+Open `127.0.0.1:8000`, look at a tile, say "click". `--calibration` takes one
+path, not a glob — pass the filename `calibrate` printed. Give it one that is
+not there and it says so and lists the ones that are.
 
 Watch the **drift** badge — how far you have moved from the calibration pose,
 in degrees, amber at 2°, red at 5°. Two things about it are not decoration. It
@@ -239,7 +240,7 @@ per-participant plots beside any p-value, no population-level claim.
 python -m pytest -q
 ```
 
-209 tests, none of which need a camera or a microphone.
+211 tests, none of which need a camera or a microphone.
 `tests/test_end_to_end.py` drives a synthetic participant through the whole
 pipeline — fusion, execution, logging, replay, the sweep and the CLI.
 `tests/test_requalify.py` drives a requalification through the same WebSocket

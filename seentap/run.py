@@ -127,6 +127,26 @@ def _load_calib(path):
     return np.asarray(F, dtype=float), np.asarray(XY, dtype=float)
 
 
+def _require_calib(path):
+    """One named calibration file, or a message that says what to do instead.
+
+    A mistyped path reads as zero calibration points -- eventlog.read returns
+    nothing for a file that is not there -- and the empty array only fails
+    forty frames down inside sklearn, where nothing names the actual mistake.
+    """
+    F, XY = _load_calib(path)
+    if len(F) >= 4:
+        return F, XY
+    found = sorted(glob.glob(f"{config.LOG_DIR}/calib-*.jsonl"))
+    why = ("does not exist" if not Path(path).exists() else
+           f"holds {len(F)} calibration point(s); a mapping needs at least four")
+    hint = ("\n  ".join(["calibration files here:", *found]) if found else
+            "no calibration files yet -- run:\n"
+            "  python -m seentap.run calibrate --density 9")
+    print(f"{path} {why}.\n{hint}", file=sys.stderr)
+    raise SystemExit(2)
+
+
 def cmd_fit(args) -> int:
     """Study 1 and the day-8 gate, from saved calibration passes."""
     sessions = {}
@@ -180,7 +200,7 @@ def cmd_serve(args) -> int:  # pragma: no cover - needs a camera and a mic
 
     cfg = FusionConfig(lead_ms=args.lead, window_ms=args.window,
                        aggregator=args.aggregator, min_samples=args.min_samples)
-    F, XY = _load_calib(args.calibration)
+    F, XY = _require_calib(args.calibration)
     mapping = calibrate.FITTERS[args.mapping](F, XY)
     print(f"mapping: {args.mapping} on {len(F)} points")
 
