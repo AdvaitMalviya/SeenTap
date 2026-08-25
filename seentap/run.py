@@ -63,7 +63,15 @@ def cmd_landmarks(args) -> int:  # pragma: no cover - needs a camera
 
 
 def cmd_calibrate(args) -> int:  # pragma: no cover - needs a camera
-    """One calibration pass: settle for a second, then collect for a second."""
+    """One calibration pass. Each target waits for the eye to stop moving.
+
+    A fixed one-second settle was not enough after a big saccade: across three
+    real sessions the targets following a full-screen jump came out three to
+    thirty times less repeatable than the rest, because the point was recorded
+    while the eye was still travelling. Nothing downstream can tell such a
+    point from a good one -- it is a confident median of the wrong place -- so
+    the check belongs here, before it is written.
+    """
     import cv2
 
     w, h = config.SCREEN_W, config.SCREEN_H
@@ -72,40 +80,76 @@ def cmd_calibrate(args) -> int:  # pragma: no cover - needs a camera
     win = "seentap calibration"
     cv2.namedWindow(win, cv2.WND_PROP_FULLSCREEN)
     cv2.setWindowProperty(win, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    canvas = np.zeros((h, w, 3), np.uint8)
+
+    def show(tx, ty, radius, colour, note):
+        canvas[:] = 0
+        cv2.circle(canvas, (int(tx), int(ty)), radius, colour, -1)
+        if note:
+            cv2.putText(canvas, note, (int(w * 0.5) - 250, int(h * 0.92)),
+                        cv2.FONT_HERSHEY_PLAIN, 2.0, (110, 110, 120), 2)
+        cv2.imshow(win, canvas)
+        return cv2.waitKey(1) & 0xFF == ord("q")
+
+    def capture(tx, ty, note):
+        """Settle until the eye is still, then record. None if the user quit."""
+        recent, samples, ears, settled = [], [], [], None
+        t0 = time.monotonic()
+        while True:
+            now = time.monotonic()
+            if settled is None:
+                frac = max(0.0, 1 - (now - t0) / config.CALIB_SETTLE_MAX_S)
+                quit_ = show(tx, ty, int(6 + 34 * frac), (60, 160, 255), note)
+            else:
+                quit_ = show(tx, ty, 8, (90, 230, 120), note)
+            if quit_:
+                return None, None, None
+            f, blink, _ = tr.read_raw(eventlog.now())
+            if f is None:
+                continue
+            row = {"f": f.tolist(), "conf": 0.0 if blink else 1.0,
+                   "blink": bool(blink)}
+            if settled is None:
+                recent = (recent + [row])[-config.CALIB_STEADY_FRAMES:]
+                waited = now - t0
+                if ((waited >= config.CALIB_SETTLE_MIN_S
+                     and calibrate.steadiness(recent) <= config.CALIB_STEADY)
+                        or waited >= config.CALIB_SETTLE_MAX_S):
+                    settled = now
+                continue
+            samples.append(row)
+            if not blink:
+                ears.append(tr.last_ear)
+            if now - settled >= config.CALIB_COLLECT_S:
+                return samples, ears, calibrate.steadiness(samples)
 
     out = Path(args.out or f"{config.LOG_DIR}/calib-{args.density}-{int(time.time())}.jsonl")
-    kept = 0
-    open_ears = []
+    kept, shaky, open_ears = 0, 0, []
     with eventlog.EventLog(out) as log:
         log.write("calibration", density=args.density, screen=[w, h],
                   features_version=config.FEATURES_VERSION)
         for (tx, ty) in pts:
-            for phase, seconds in (("settle", 1.0), ("collect", 1.0)):
-                t_end = time.monotonic() + seconds
-                samples = []
-                while time.monotonic() < t_end:
-                    canvas = np.zeros((h, w, 3), np.uint8)
-                    frac = max(0.0, (t_end - time.monotonic()) / seconds)
-                    r = int(6 + 34 * frac) if phase == "settle" else 8
-                    colour = (60, 160, 255) if phase == "settle" else (90, 230, 120)
-                    cv2.circle(canvas, (int(tx), int(ty)), r, colour, -1)
-                    cv2.imshow(win, canvas)
-                    if cv2.waitKey(1) & 0xFF == ord("q"):
-                        tr.close(); cv2.destroyAllWindows(); return 1
-                    f, blink, _ = tr.read_raw(eventlog.now())
-                    if phase == "collect" and f is not None:
-                        samples.append({"f": f.tolist(), "conf": 0.0 if blink else 1.0,
-                                        "blink": bool(blink)})
-                        if not blink:
-                            open_ears.append(tr.last_ear)
-                if phase == "collect":
-                    med = calibrate.condense(samples)
-                    if med is None:
-                        print(f"  target ({tx:.0f},{ty:.0f}): no usable samples")
-                        continue
-                    log.write("calib_point", f=med.tolist(), target=[tx, ty],
-                              n_raw=len(samples))
-                    kept += 1
+            for attempt in range(config.CALIB_ATTEMPTS):
+                note = "" if attempt == 0 else "hold still and follow the dot"
+                samples, ears, spread = capture(tx, ty, note)
+                if samples is None:
+                    tr.close()
+                    cv2.destroyAllWindows()
+                    return 1
+                if spread <= config.CALIB_STEADY:
+                    break
+            med = calibrate.condense(samples)
+            if med is None:
+                print(f"  ({tx:.0f},{ty:.0f}): no usable samples")
+                continue
+            if spread > config.CALIB_STEADY:
+                shaky += 1
+                print(f"  ({tx:.0f},{ty:.0f}): never settled "
+                      f"(spread {spread:.3f} > {config.CALIB_STEADY}), kept anyway")
+            open_ears.extend(ears)
+            log.write("calib_point", f=med.tolist(), target=[tx, ty],
+                      n_raw=len(samples), steadiness=spread)
+            kept += 1
         # The eyes were held open on a target for a second per point, so the
         # blink threshold comes free rather than as a fixed guess.
         from seentap.gaze import blink_threshold
@@ -115,8 +159,22 @@ def cmd_calibrate(args) -> int:  # pragma: no cover - needs a camera
               f"(from {len(open_ears)} open-eye frames)")
     tr.close()
     cv2.destroyAllWindows()
-    print(f"{kept}/{len(pts)} targets captured -> {out}")
+    print(f"{kept}/{len(pts)} targets captured"
+          + (f", {shaky} never settled" if shaky else "") + f" -> {out}")
     return 0 if kept >= 4 else 1
+
+
+def _newest_calib():
+    """The newest usable calibration, which is almost always the one meant.
+
+    Newest alone is not enough: a run quit halfway leaves a short file behind,
+    and picking it would be worse than asking.
+    """
+    for path in sorted(glob.glob(f"{config.LOG_DIR}/calib-*.jsonl"), reverse=True):
+        F, _XY, version = _load_calib(path)
+        if version == config.FEATURES_VERSION and len(F) >= 4:
+            return path
+    return None
 
 
 def _load_calib(path):
@@ -145,6 +203,8 @@ def _require_calib(path):
         print(f"{path} {why}.\n{tail}", file=sys.stderr)
         raise SystemExit(2)
 
+    if path is None:
+        bail("no calibration file given and none found")
     if not Path(path).exists():
         bail("does not exist")
     F, XY, version = _load_calib(path)
@@ -197,6 +257,16 @@ def cmd_fit(args) -> int:
         print("  these are fitted errors, not accuracy -- record a second pass "
               "and pass it as --held for a real number")
 
+    shaky = [(r["target"], r["steadiness"])
+             for r in eventlog.read(sessions[max(sessions)][2])
+             if r.get("kind") == "calib_point"
+             and r.get("steadiness", 0) > config.CALIB_STEADY]
+    if shaky:
+        print("\ntargets recorded while the eye was still moving:")
+        for (tx, ty), sp in shaky:
+            print(f"  ({tx:.0f},{ty:.0f}) spread {sp:.3f}")
+        print("  each of these is a confident median of the wrong place")
+
     Fb, XYb = sessions[max(sessions)][:2]
     sig = calibrate.signal_report(Fb, XYb)
     print(f"\neye signal: horizontal r = {sig['horizontal']:+.2f}, "
@@ -241,13 +311,15 @@ def cmd_serve(args) -> int:  # pragma: no cover - needs a camera and a mic
 
     cfg = FusionConfig(lead_ms=args.lead, window_ms=args.window,
                        aggregator=args.aggregator, min_samples=args.min_samples)
-    F, XY = _require_calib(args.calibration)
+    path = args.calibration or _newest_calib()
+    F, XY = _require_calib(path)
+    print(f"calibration: {path}")
     mapping = calibrate.FITTERS[args.mapping](F, XY)
     print(f"mapping: {args.mapping} on {len(F)} points")
 
     # The pose the mapping was fitted at. Live drift is measured against it.
     tracker = _tracker(mapping, f_ref=np.median(F, axis=0))
-    for row in eventlog.read(args.calibration):
+    for row in eventlog.read(path):
         if row.get("kind") == "blink_threshold":
             tracker.blink_ear = row["value"]
             print(f"blink threshold: {tracker.blink_ear:.3f} (from calibration)")
@@ -347,7 +419,8 @@ def main(argv=None) -> int:
     f.set_defaults(fn=cmd_fit)
 
     s = sub.add_parser("serve", help="live system and dashboard")
-    s.add_argument("--calibration", required=True)
+    s.add_argument("--calibration",
+                   help="default: the newest logs/calib-*.jsonl")
     s.add_argument("--mapping", default="poly", choices=list(calibrate.FITTERS))
     s.add_argument("--mode", default="B", choices=["A", "B"])
     s.add_argument("--condition", default="C3", choices=list(config.CONDITIONS))

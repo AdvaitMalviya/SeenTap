@@ -113,7 +113,9 @@ these indices between releases, and when they are wrong everything downstream
 fails in a way that looks like bad calibration.
 
 **2. Calibrate once.** Follow the shrinking dot through nine targets, about
-twenty seconds. Sit still.
+twenty seconds. Sit still and actually look at each dot — it turns green only
+once your eye has stopped moving, and a target you did not settle on is
+retried rather than recorded.
 
 ```bash
 python -m seentap.run calibrate --density 9
@@ -132,11 +134,11 @@ memory and leaves this file alone.
 
 `fit` then prints the accuracy table across three calibration densities and
 three mapping types, with a pass/fail verdict against 8% of screen width. It
-also reports how well each axis of your eye actually tracked the target. A
-calibration can capture nine clean points and still be useless if one axis
-carries no signal, and the error figure alone does not say which — so if
-vertical comes back near zero, refitting will not help and it needs recording
-again.
+also reports how well each axis of your eye actually tracked the target, and
+names any target recorded while your eye was still moving. A calibration can
+capture nine clean points and still be useless if one carries no signal, and
+the error figure alone does not say which — if an axis comes back near zero,
+refitting will not help and it needs recording again.
 
 Scored against a **held-out** recording only if you pass one as `--held`.
 Without it the numbers are fitted errors, not accuracy, and `fit` says so
@@ -145,13 +147,14 @@ rather than quietly flattering itself.
 **3. Run it.**
 
 ```bash
-ls logs/calib-*.jsonl                      # your file, with its own timestamp
-python -m seentap.run serve --calibration logs/calib-9-<your-timestamp>.jsonl
+python -m seentap.run serve
 ```
 
-Open `127.0.0.1:8000`, look at a tile, say "click". `--calibration` takes one
-path, not a glob — pass the filename `calibrate` printed. Give it one that is
-not there and it says so and lists the ones that are.
+It uses the newest usable calibration and prints which one. Pass
+`--calibration <path>` to pick a different file; give it one that is not there
+and it says so and lists the ones that are.
+
+Open `127.0.0.1:8000`, look at a tile, say "click".
 
 Watch the **drift** badge — how far you have moved from the calibration pose,
 in degrees, amber at 2°, red at 5°. Two things about it are not decoration. It
@@ -249,7 +252,7 @@ per-participant plots beside any p-value, no population-level claim.
 python -m pytest -q
 ```
 
-215 tests, none of which need a camera or a microphone.
+217 tests, none of which need a camera or a microphone.
 `tests/test_end_to_end.py` drives a synthetic participant through the whole
 pipeline — fusion, execution, logging, replay, the sweep and the CLI.
 `tests/test_requalify.py` drives a requalification through the same WebSocket
@@ -271,6 +274,10 @@ portrait and skips if you have not fetched one.
 * Five points buy an **affine** correction: offset, scale and shear, which is
   what pose drift mostly looks like. A large change of posture deforms the
   mapping in ways an affine cannot express, and still wants a full pass.
+* A target that will not settle after three attempts is **kept anyway** and
+  reported, rather than dropped. Dropping it would silently change the
+  calibration density the fit was scored at, which is one of the things the
+  evaluation compares.
 * Calibration files carry a **feature-layout version**. Change what
   `features()` computes and every saved file becomes unreadable — the vectors
   are already extracted, so old ones would be silent nonsense rather than a

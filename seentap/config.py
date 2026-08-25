@@ -46,6 +46,18 @@ GRID_COLS = 4
 GRID_ROWS = 3
 N_TILES = GRID_COLS * GRID_ROWS
 
+# --- calibration capture --------------------------------------------------
+# A target is only recorded once the eye has stopped moving. Peak-to-peak
+# spread of the four eye ratios, in feature units: targets a user genuinely
+# fixated repeat to about 0.007 between sessions, ones they did not are three
+# to thirty times worse. Raise it if good targets keep being retried.
+CALIB_STEADY = 0.05
+CALIB_STEADY_FRAMES = 10   # the run of frames the check looks back over
+CALIB_SETTLE_MIN_S = 0.6   # never trust a fixation faster than this
+CALIB_SETTLE_MAX_S = 2.5   # ... and stop waiting for one after this
+CALIB_COLLECT_S = 1.0
+CALIB_ATTEMPTS = 3         # a target that will not settle is retried, then skipped
+
 # --- the day-8 gate --------------------------------------------------------
 GATE_FRAC = 0.08          # of screen width; 121 px at 1512, 154 px at 1920
 DENSITIES = (5, 9, 13)    # calibration point counts compared in Study 1

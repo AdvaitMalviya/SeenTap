@@ -91,3 +91,39 @@ def test_a_calibration_from_an_older_feature_layout_is_refused(tmp_path, capsys)
         run._require_calib(str(path))
     err = capsys.readouterr().err
     assert "v1" in err and "recorded again" in err
+
+
+def test_serve_picks_the_newest_usable_calibration(tmp_path, monkeypatch):
+    """A run quit halfway leaves a short file behind; newest alone would take
+    it. And the exact-filename requirement was a trap: the README's example
+    timestamp is not yours."""
+    from seentap import config, eventlog, run
+
+    monkeypatch.setattr(config, "LOG_DIR", str(tmp_path))
+
+    def write(name, points, version=config.FEATURES_VERSION):
+        with eventlog.EventLog(tmp_path / name) as log:
+            log.write("calibration", density=9, features_version=version)
+            for i in range(points):
+                log.write("calib_point", f=[0.0] * 9, target=[i * 10.0, i * 10.0])
+
+    write("calib-9-100.jsonl", 9)
+    write("calib-9-200.jsonl", 2)               # quit halfway
+    write("calib-9-300.jsonl", 9, version=1)    # older feature layout
+    assert run._newest_calib().endswith("calib-9-100.jsonl")
+
+    write("calib-9-400.jsonl", 9)
+    assert run._newest_calib().endswith("calib-9-400.jsonl")
+
+
+def test_no_calibration_at_all_is_a_message_not_a_crash(tmp_path, monkeypatch,
+                                                        capsys):
+    import pytest
+
+    from seentap import config, run
+
+    monkeypatch.setattr(config, "LOG_DIR", str(tmp_path))
+    assert run._newest_calib() is None
+    with pytest.raises(SystemExit):
+        run._require_calib(run._newest_calib())
+    assert "calibrate --density 9" in capsys.readouterr().err
