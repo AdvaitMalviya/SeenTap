@@ -112,7 +112,12 @@ Confirm the green dots sit on your irises and eye corners. MediaPipe has moved
 these indices between releases, and when they are wrong everything downstream
 fails in a way that looks like bad calibration.
 
-**2. Calibrate once.** Follow the shrinking dot through nine targets, about
+**2. Calibrate once.** More points is the one lever that reliably helps —
+`--density` takes 5, 9, 13, 25, 49 or 81, and the larger grids also walk in a
+serpentine so consecutive targets are neighbours rather than full-screen jumps.
+Twenty-five costs about a minute.
+
+ Follow the shrinking dot through nine targets, about
 twenty seconds. Sit still and actually look at each dot — it turns green only
 once your eye has stopped moving, and a target you did not settle on is
 retried rather than recorded.
@@ -316,7 +321,7 @@ per-participant plots beside any p-value, no population-level claim.
 python -m pytest -q
 ```
 
-236 tests, none of which need a camera, a microphone or a display.
+241 tests, none of which need a camera, a microphone or a display.
 `tests/test_end_to_end.py` drives a synthetic participant through the whole
 pipeline — fusion, execution, logging, replay, the sweep and the CLI.
 `tests/test_requalify.py` drives a requalification through the same WebSocket
@@ -345,6 +350,14 @@ portrait and skips if you have not fetched one.
   echoes the image size back. The area excludes the menu bar, so targets are
   logged at where they were actually drawn rather than where they were asked
   for.
+* A feature the calibration never exercised is **dropped from the fit**. Told
+  to sit still, a user varies head pose by half a degree, but least squares
+  still prices it — ridge put pitch at −3474 px per radian — and sitting down
+  9° differently the next day then swung the prediction 638 px on a 982 px
+  screen. Dropping them costs nothing they could honestly provide: they could
+  only ever absorb head movement they had been shown, and requalification
+  covers that instead. A calibration that genuinely samples head movement
+  keeps them.
 * A target that will not settle after three attempts is **kept anyway** and
   reported, rather than dropped. Dropping it would silently change the
   calibration density the fit was scored at, which is one of the things the

@@ -414,6 +414,15 @@ def cmd_fit(args) -> int:
             print(f"  ({tx:.0f},{ty:.0f}) spread {sp:.3f}")
         print("  each of these is a confident median of the wrong place")
 
+    names = ["hL", "hR", "vL", "vR", "yaw", "pitch", "roll", "iod", "1"]
+    kept = calibrate.useful_columns(sessions[max(sessions)][0])
+    dropped = [names[i] for i in range(len(names)) if i not in kept]
+    if dropped:
+        print(f"\nfeatures dropped: {', '.join(dropped)} -- they barely moved "
+              f"while you were calibrating, so the fit has no measured "
+              f"relationship for them and would extrapolate wildly the moment "
+              f"you did move")
+
     Fb, XYb = sessions[max(sessions)][:2]
     sig = calibrate.signal_report(Fb, XYb)
     print(f"\neye signal: horizontal r = {sig['horizontal']:+.2f}, "
@@ -635,7 +644,8 @@ def main(argv=None) -> int:
                    ).set_defaults(fn=cmd_landmarks)
 
     c = sub.add_parser("calibrate", help="run one calibration pass")
-    c.add_argument("--density", type=int, default=9, choices=config.DENSITIES)
+    c.add_argument("--density", type=int, default=9,
+                   choices=config.DENSITY_CHOICES)
     c.add_argument("--out")
     c.set_defaults(fn=cmd_calibrate)
 
@@ -668,7 +678,8 @@ def main(argv=None) -> int:
 
     ck = sub.add_parser("check", help="measure real accuracy on fresh fixations")
     ck.add_argument("--calibration", help="default: the newest usable one")
-    ck.add_argument("--density", type=int, default=9, choices=config.DENSITIES)
+    ck.add_argument("--density", type=int, default=9,
+                    choices=config.DENSITY_CHOICES)
     ck.add_argument("--mapping", default="poly", choices=list(calibrate.FITTERS))
     ck.set_defaults(fn=cmd_check)
 

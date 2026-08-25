@@ -5,22 +5,55 @@ can be re-fitted fifty times. That is what makes the nine-cell table cheap.
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from sklearn.linear_model import Ridge
 from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import PolynomialFeatures
+from sklearn.preprocessing import PolynomialFeatures, StandardScaler
 
 from seentap import config
 
 ALPHAS = (1e-6, 1e-4, 1e-2, 1.0, 10.0, 100.0)
 
 
+def useful_columns(F: np.ndarray) -> list[int]:
+    """Which features calibration actually exercised.
+
+    A feature that barely moved while the points were collected has no
+    measured relationship to gaze, but least squares will still hand it a
+    coefficient to mop up residuals -- and then any real movement multiplies
+    that coefficient by something the fit never saw. Head pose is the
+    offender: told to sit still the user varies it by half a degree, and ridge
+    priced pitch at -3474 px per radian. Come back the next day nine degrees
+    different and the prediction leaves the screen, which is exactly what it
+    did.
+
+    Dropping them is not a loss. They could only ever have absorbed head
+    movement they had been shown, and requalification handles that instead.
+    """
+    F = np.atleast_2d(np.asarray(F, dtype=float))
+    keep = [i for i in range(F.shape[1])
+            if F[:, i].std() >= config.FEATURE_FLOOR.get(i, 0.0)]
+    return keep or list(range(F.shape[1]))
+
+
 class _SkMapping:
-    def __init__(self, model):
+    """A fitted model plus the columns it was fitted on.
+
+    Callers hand over the whole feature vector and this takes the slice, so
+    nothing downstream has to know which features survived selection.
+    """
+
+    def __init__(self, model, cols=None):
         self.model = model
+        self.cols = cols
 
     def predict(self, F: np.ndarray) -> np.ndarray:
-        return np.asarray(self.model.predict(np.atleast_2d(F)), dtype=float)
+        F = np.atleast_2d(np.asarray(F, dtype=float))
+        if self.cols is not None:
+            F = F[:, self.cols]
+        return np.asarray(self.model.predict(F), dtype=float)
 
 
 class _Homography:
@@ -44,7 +77,11 @@ class _Homography:
 def fit_ridge(F: np.ndarray, XY: np.ndarray, alpha: float | None = None) -> _SkMapping:
     if alpha is None:
         alpha = loo_cv_alpha(F, XY, fit_ridge, ALPHAS)
-    return _SkMapping(Ridge(alpha=alpha).fit(F, XY))
+    cols = useful_columns(F)
+    # Standardised first: the columns differ in scale by three orders of
+    # magnitude, and an unscaled ridge penalty falls on them unevenly.
+    return _SkMapping(make_pipeline(StandardScaler(), Ridge(alpha=alpha))
+                      .fit(np.atleast_2d(F)[:, cols], XY), cols)
 
 
 def fit_poly(F: np.ndarray, XY: np.ndarray, alpha: float | None = None,
@@ -52,10 +89,12 @@ def fit_poly(F: np.ndarray, XY: np.ndarray, alpha: float | None = None,
     if alpha is None:
         alpha = loo_cv_alpha(F, XY, lambda f, xy, a=None: fit_poly(f, xy, a or 1e-6),
                              ALPHAS)
+    cols = useful_columns(F)
     return _SkMapping(make_pipeline(
+        StandardScaler(),
         PolynomialFeatures(degree=degree, include_bias=False),
         Ridge(alpha=alpha),
-    ).fit(F, XY))
+    ).fit(np.atleast_2d(F)[:, cols], XY), cols)
 
 
 def fit_homography(F: np.ndarray, XY: np.ndarray) -> _Homography:
@@ -246,11 +285,35 @@ def gate_passed(table: list[dict], screen_w: int = config.SCREEN_W,
 
 
 def targets(density: int, w: int = config.SCREEN_W, h: int = config.SCREEN_H,
-            margin: float = 0.08) -> list[tuple[float, float]]:
-    """Calibration target positions for 5, 9 or 13 points."""
+             margin: float = 0.08) -> list[tuple[float, float]]:
+    """Calibration target positions.
+
+    5, 9 and 13 keep the exact layouts the study compares. Anything else is
+    laid out as the nearest grid that holds it, walked in a serpentine so
+    consecutive targets are neighbours: a full-width jump costs a large saccade
+    and the eye has to be waited out again on the far side.
+    """
     lo, hi, mid = margin, 1 - margin, 0.5
     five = [(mid, mid), (lo, lo), (hi, lo), (lo, hi), (hi, hi)]
     nine = five + [(mid, lo), (mid, hi), (lo, mid), (hi, mid)]
     thirteen = nine + [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)]
-    grid = {5: five, 9: nine, 13: thirteen}[density]
+    fixed = {5: five, 9: nine, 13: thirteen}
+    grid = fixed.get(density) or _serpentine(density, lo, hi)
     return [(fx * w, fy * h) for fx, fy in grid]
+
+
+def _serpentine(density: int, lo: float, hi: float):
+    """A near-square grid of `density` points, walked without long jumps."""
+    if density < 4:
+        raise ValueError(f"a mapping needs at least four targets, got {density}")
+    cols = int(round(math.sqrt(density * 1.54)))          # the screen is wider
+    rows = max(2, int(round(density / max(cols, 1))))
+    cols = max(2, int(round(density / rows)))
+    out = []
+    for r in range(rows):
+        xs = [lo + (hi - lo) * c / (cols - 1) for c in range(cols)]
+        if r % 2:
+            xs.reverse()                                  # back along the row
+        y = lo + (hi - lo) * r / (rows - 1)
+        out.extend((x, y) for x in xs)
+    return out

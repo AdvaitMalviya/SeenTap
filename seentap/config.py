@@ -64,7 +64,10 @@ CALIB_DOT_MAX_PX = 40      # ... shrinking to it over CALIB_SETTLE_MIN_S
 
 # --- the day-8 gate --------------------------------------------------------
 GATE_FRAC = 0.08          # of screen width; 121 px at 1512, 154 px at 1920
-DENSITIES = (5, 9, 13)    # calibration point counts compared in Study 1
+DENSITIES = (5, 9, 13)    # the three the study compares
+# More points buy accuracy the only way that is available here: by averaging
+# down the per-visit noise. They cost about two seconds each.
+DENSITY_CHOICES = (5, 9, 13, 25, 49, 81)
 HELD_OUT_POINTS = 5
 STUDY1_REPETITIONS = 5
 
@@ -78,6 +81,23 @@ DEADZONE_PX = 15          # cursor mode only; kills micro-drift
 CONF_FLOOR = 0.5
 ONE_EURO_MIN_CUTOFF = 1.0
 ONE_EURO_BETA = 0.007
+
+# --- which features earn their place ---------------------------------------
+# How far each feature drifts between sessions when the user simply sits down
+# again -- head pose measured about 5 degrees between two of ours. A column
+# that varied LESS than this during calibration was fitted from its own noise
+# and will extrapolate wildly the moment the user moves: with head pose left
+# in, a 9.5 degree pitch change swung the prediction 638 px on a 982 px screen.
+# Keyed by index into the feature vector; the eye ratios carry the signal and
+# have no floor.
+import math as _math
+
+FEATURE_FLOOR = {
+    4: _math.radians(5.0),    # yaw
+    5: _math.radians(5.0),    # pitch
+    6: _math.radians(5.0),    # roll
+    7: 0.002,                 # interocular
+}
 
 # --- gaze gating -----------------------------------------------------------
 GATE_WINDOW_MS = 200      # dispersion is measured over this much history
