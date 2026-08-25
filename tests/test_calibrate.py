@@ -173,3 +173,68 @@ def test_a_density_with_no_factor_pair_is_refused_rather_than_rounded():
     density table; a prime says so instead."""
     with pytest.raises(ValueError, match="factor pair"):
         calibrate.targets(23, 1512, 982)
+
+
+# The nine fresh fixations from a real `check` run: target then prediction.
+CHECK_RUN = [(756, 508, 733, 485), (121, 109, 149, 195), (1391, 109, 1232, 144),
+             (121, 906, 127, 842), (1391, 906, 1347, 788), (756, 109, 741, 211),
+             (756, 906, 723, 786), (121, 508, 166, 637), (1391, 508, 1551, 512)]
+
+
+def _check_run():
+    a = np.array(CHECK_RUN, dtype=float)
+    return a[:, :2], a[:, 2:]
+
+
+def test_a_pure_scale_error_averages_to_no_offset_at_all():
+    """Why offset-against-scatter could not name this error. The mapping's
+    vertical output spanned 622 px of an 797 px range -- a gain of 0.78, which
+    is 108 px short at the bottom of the screen -- and the mean offset it
+    produced was 3 px. Reading offset alone, `check` called a 111 px
+    systematic error weak signal and said recalibrating would not help."""
+    T, P = _check_run()
+    shape = calibrate.residual_shape(T, P)
+    assert shape["mean_err"] == pytest.approx(111, abs=1)
+    assert abs(shape["offset"][1]) < 5, "the offset is silent about it"
+    assert shape["gain"][1] == pytest.approx(0.78, abs=0.01), "but the gain is not"
+
+
+def test_the_recoverable_part_lands_on_the_calibrations_own_error():
+    """The 111 px was not weak signal: correcting offset and scale takes it to
+    81 px, and 81 px is the leave-one-out error of the calibration it was
+    scored against. Every pixel above that was drift the five-point
+    requalification already knows how to remove."""
+    T, P = _check_run()
+    shape = calibrate.residual_shape(T, P)
+    assert shape["corrected_err"] == pytest.approx(80, abs=2)
+    assert shape["mean_err"] - shape["corrected_err"] > config.RECOVERABLE_PX
+
+
+def test_correcting_gain_is_what_recovers_it_not_correcting_offset():
+    """Shifting by the mean residual changes nothing here -- that is precisely
+    the failure. The scale term is the one carrying the error."""
+    T, P = _check_run()
+    d = P - T
+    offset_only = np.linalg.norm((P - d.mean(axis=0)) - T, axis=1).mean()
+    assert offset_only == pytest.approx(111, abs=1), "offset alone buys nothing"
+    assert calibrate.residual_shape(T, P)["corrected_err"] < offset_only - 25
+
+
+def test_a_mapping_that_lands_on_its_targets_reports_unit_gain():
+    """The report has to stay quiet when there is nothing to say, or the
+    call-out is noise."""
+    T, _ = _check_run()
+    shape = calibrate.residual_shape(T, T)
+    assert shape["gain"] == pytest.approx((1.0, 1.0), abs=1e-6)
+    assert shape["mean_err"] == pytest.approx(0.0, abs=1e-9)
+    assert all(abs(1 - g) <= config.GAIN_TOLERANCE for g in shape["gain"])
+
+
+def test_requalification_fits_the_same_affine_check_reports_as_recoverable():
+    """`check` promises a number that requalification then has to deliver. It
+    is believable only because both read the six parameters from one place."""
+    T, P = _check_run()
+    A = calibrate.affine_between(P, T)
+    corrected = calibrate.apply_affine(A, P)
+    direct = np.linalg.norm(corrected - T, axis=1).mean()
+    assert direct == pytest.approx(calibrate.residual_shape(T, P)["corrected_err"])

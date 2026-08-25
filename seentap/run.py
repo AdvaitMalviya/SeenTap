@@ -296,17 +296,42 @@ def cmd_check(args) -> int:  # pragma: no cover - needs a camera
     a = np.array(rows)
     d = a[:, 2:] - a[:, :2]
     err = np.linalg.norm(d, axis=1)
+    shape = calibrate.residual_shape(a[:, :2], a[:, 2:])
+    gx, gy = shape["gain"]
     print(f"\nmean error {err.mean():.0f} px  (dx {np.abs(d[:,0]).mean():.0f}, "
           f"dy {np.abs(d[:,1]).mean():.0f})   gate is "
           f"{config.GATE_FRAC*config.SCREEN_W:.0f} px")
-    print(f"constant offset: ({d[:,0].mean():+.0f}, {d[:,1].mean():+.0f}) px")
-    print(f"scatter about that offset: ({d[:,0].std():.0f}, {d[:,1].std():.0f}) px")
-    if np.linalg.norm(d.mean(axis=0)) > 1.5 * d.std(axis=0).mean():
-        print("  -> mostly a constant offset. The head has moved since "
-              "calibrating; say 'recalibrate' or press r to correct it.")
+    print(f"constant offset: ({shape['offset'][0]:+.0f}, "
+          f"{shape['offset'][1]:+.0f}) px")
+    # Gain is reported because offset and scatter alone cannot see it: a scale
+    # error is symmetric about the centre of the screen, so it averages to no
+    # offset and lands entirely in the scatter, which is how a 111 px
+    # systematic error got called weak signal.
+    print(f"gain: ({gx:.2f}, {gy:.2f})   1.00 reaches the screen edge")
+    for g, axis, half in ((gx, "horizontal", config.SCREEN_W / 2),
+                          (gy, "vertical", config.SCREEN_H / 2)):
+        if abs(1 - g) > config.GAIN_TOLERANCE:
+            print(f"  {axis} travel is {'short' if g < 1 else 'long'} by "
+                  f"{abs(1-g)*half:.0f} px at the screen edge "
+                  f"({'under' if g < 1 else 'over'}-reaching by {abs(1-g):.0%})")
+    print(f"scatter about the offset: ({shape['scatter'][0]:.0f}, "
+          f"{shape['scatter'][1]:.0f}) px")
+
+    # What requalification would actually leave behind, from these very points
+    # -- the same six parameters it fits, so this is a measurement, not an
+    # estimate.
+    recoverable = err.mean() - shape["corrected_err"]
+    print(f"\ncorrecting offset and gain would leave "
+          f"{shape['corrected_err']:.0f} px "
+          f"({recoverable:+.0f} px of the {err.mean():.0f})")
+    if recoverable > config.RECOVERABLE_PX:
+        print("  -> most of this is offset and scale, not weak signal. The "
+              "head has moved or changed distance since calibrating; say "
+              "'recalibrate' or press r and it comes back.")
     else:
-        print("  -> mostly scatter, not offset. Recalibrating will not fix "
-              "this; the eye signal itself is weak.")
+        print("  -> little of this is offset or scale, so recalibrating will "
+              "not fix it; the eye signal itself is weak. A denser "
+              "calibration is the lever that is left.")
     return 0
 
 

@@ -103,6 +103,17 @@ FEATURE_FLOOR = {
     7: 0.002,                 # interocular
 }
 
+# How far the slope of predicted-against-target may sit from 1.0 before
+# `check` calls it out. At 0.05 the shortest call-out is 25 px at the screen
+# edge, comfortably inside the 121 px gate; the vertical gain that prompted
+# this measured 0.78, which is 108 px short at the bottom of the screen.
+GAIN_TOLERANCE = 0.05
+# Above this many pixels, the error an affine correction removes is worth a
+# requalification rather than a fresh calibration. Five points and a few
+# seconds against a full pass: measured, correcting a 111 px check took it to
+# 81 px, and 81 px is that calibration's own leave-one-out error.
+RECOVERABLE_PX = 15.0
+
 # --- gaze gating -----------------------------------------------------------
 GATE_WINDOW_MS = 200      # dispersion is measured over this much history
 GATE_DISPERSION_PX = 120  # above this the eyes are sweeping, not fixating

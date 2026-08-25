@@ -113,6 +113,58 @@ def fit_homography(F: np.ndarray, XY: np.ndarray) -> _Homography:
 FITTERS = {"ridge": fit_ridge, "poly": fit_poly, "homography": fit_homography}
 
 
+def affine_between(P: np.ndarray, XY: np.ndarray) -> np.ndarray:
+    """The six parameters carrying predicted points onto where they belong.
+
+    Offset, scale and shear on the mapping's *output*. This is the whole of
+    requalification, and also what ``check`` reports as recoverable, so both
+    read it from here rather than each fitting their own.
+    """
+    P = np.atleast_2d(np.asarray(P, dtype=float))
+    A, *_ = np.linalg.lstsq(np.column_stack([P, np.ones(len(P))]),
+                            np.asarray(XY, dtype=float), rcond=None)
+    return np.asarray(A.T, dtype=float)
+
+
+def apply_affine(A: np.ndarray, P: np.ndarray) -> np.ndarray:
+    P = np.atleast_2d(np.asarray(P, dtype=float))
+    return np.column_stack([P, np.ones(len(P))]) @ np.asarray(A, dtype=float).T
+
+
+def residual_shape(T: np.ndarray, P: np.ndarray) -> dict:
+    """Split predicted-minus-target into offset, gain and scatter.
+
+    Offset against scatter is not enough to name the error, because a pure
+    scale error is symmetric about the centre of the screen and therefore
+    averages to no offset at all. Measured on nine fresh fixations: the
+    vertical gain was 0.78 -- the mapping's vertical output spanned 622 px of
+    an 797 px range -- while the mean offset came to (-4, +3) px. Reading only
+    those two numbers called a 111 px systematic error "scatter" and told the
+    user recalibrating would not help, when correcting the gain took it to
+    81 px, which is the calibration's own leave-one-out error.
+
+    ``gain`` is the slope of predicted against target per axis: 1.0 reaches the
+    screen edge, below 1.0 falls short of it, and the shortfall grows with
+    distance from the centre, so it is worst exactly where the edges are.
+    """
+    T = np.atleast_2d(np.asarray(T, dtype=float))
+    P = np.atleast_2d(np.asarray(P, dtype=float))
+    d = P - T
+    err = np.linalg.norm(d, axis=1)
+    gain = [float(np.polyfit(T[:, i], P[:, i], 1)[0])
+            if np.ptp(T[:, i]) > 1e-9 else 1.0 for i in (0, 1)]
+    corrected = (float(np.linalg.norm(apply_affine(affine_between(P, T), P) - T,
+                                      axis=1).mean())
+                 if len(T) >= 3 else float(err.mean()))
+    return {
+        "mean_err": float(err.mean()),
+        "offset": (float(d[:, 0].mean()), float(d[:, 1].mean())),
+        "gain": (gain[0], gain[1]),
+        "scatter": (float(d[:, 0].std()), float(d[:, 1].std())),
+        "corrected_err": corrected,
+    }
+
+
 class _Corrected:
     """A fitted mapping plus an affine correction from a handful of fresh points.
 
@@ -129,8 +181,7 @@ class _Corrected:
         self.A = A
 
     def predict(self, F: np.ndarray) -> np.ndarray:
-        P = np.atleast_2d(np.asarray(self.base.predict(F), dtype=float))
-        return np.column_stack([P, np.ones(len(P))]) @ self.A.T
+        return apply_affine(self.A, self.base.predict(F))
 
 
 def mean_err(model, F: np.ndarray, XY: np.ndarray) -> float:
@@ -156,9 +207,7 @@ def fit_correction(base, F: np.ndarray, XY: np.ndarray,
     # Correct the original mapping, never a correction: requalifying twice has
     # to re-measure the drift, not stack a second guess on top of the first.
     base = getattr(base, "base", base)
-    P = np.atleast_2d(np.asarray(base.predict(F), dtype=float))
-    A, *_ = np.linalg.lstsq(np.column_stack([P, np.ones(len(P))]), XY, rcond=None)
-    model = _Corrected(base, np.asarray(A.T, dtype=float))
+    model = _Corrected(base, affine_between(base.predict(F), XY))
 
     before, after = mean_err(base, F, XY), mean_err(model, F, XY)
     limit = config.GATE_FRAC * config.SCREEN_W if max_err is None else max_err
