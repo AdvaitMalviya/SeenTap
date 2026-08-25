@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -309,13 +310,25 @@ def cmd_check(args) -> int:  # pragma: no cover - needs a camera
     return 0
 
 
+def _by_age(paths):
+    """Oldest first, by the clock rather than by the name.
+
+    Sorting the names put calib-9- ahead of calib-49-, because as text "9"
+    beats "4". A nine-point file from any time therefore outranked every
+    denser calibration ever recorded, and the newest-wins rules quietly picked
+    a stale one -- two density comparisons were run against it without either
+    of the new files being read.
+    """
+    return sorted(paths, key=lambda p: (os.path.getmtime(p), p))
+
+
 def _newest_calib():
     """The newest usable calibration, which is almost always the one meant.
 
     Newest alone is not enough: a run quit halfway leaves a short file behind,
     and picking it would be worse than asking.
     """
-    for path in sorted(glob.glob(f"{config.LOG_DIR}/calib-*.jsonl"), reverse=True):
+    for path in reversed(_by_age(glob.glob(f"{config.LOG_DIR}/calib-*.jsonl"))):
         F, _XY, version, _d = _load_calib(path)
         if version == config.FEATURES_VERSION and len(F) >= 4:
             return path
@@ -343,7 +356,7 @@ def _require_calib(path):
     forty frames down inside sklearn, where nothing names the actual mistake.
     """
     def bail(why: str, fix: str | None = None):
-        found = sorted(glob.glob(f"{config.LOG_DIR}/calib-*.jsonl"))
+        found = _by_age(glob.glob(f"{config.LOG_DIR}/calib-*.jsonl"))
         tail = fix or ("\n  ".join(["calibration files here:", *found]) if found
                        else "no calibration files yet -- run:\n"
                             "  python -m seentap.run calibrate --density 9")
@@ -368,7 +381,7 @@ def _require_calib(path):
 def cmd_fit(args) -> int:
     """Study 1 and the day-8 gate, from saved calibration passes."""
     sessions, skipped = {}, []
-    for path in sorted(glob.glob(args.pattern)):
+    for path in _by_age(glob.glob(args.pattern)):
         F, XY, version, density = _load_calib(path)
         if version != config.FEATURES_VERSION or len(F) < 4:
             skipped.append(f"{path} (v{version}, {len(F)} points)")
@@ -660,7 +673,7 @@ def main(argv=None) -> int:
                    help="default: the newest logs/calib-*.jsonl")
     s.add_argument("--mic", help="input device index or name fragment; "
                                  "default is whatever the OS calls default")
-    s.add_argument("--mapping", default="poly", choices=list(calibrate.FITTERS))
+    s.add_argument("--mapping", default="ridge", choices=list(calibrate.FITTERS))
     s.add_argument("--mode", default="B", choices=["A", "B"])
     s.add_argument("--condition", default="C3", choices=list(config.CONDITIONS))
     s.add_argument("--real", action="store_true",
@@ -680,7 +693,7 @@ def main(argv=None) -> int:
     ck.add_argument("--calibration", help="default: the newest usable one")
     ck.add_argument("--density", type=int, default=9,
                     choices=config.DENSITY_CHOICES)
-    ck.add_argument("--mapping", default="poly", choices=list(calibrate.FITTERS))
+    ck.add_argument("--mapping", default="ridge", choices=list(calibrate.FITTERS))
     ck.set_defaults(fn=cmd_check)
 
     mi = sub.add_parser("mic", help="list input devices and how loud they are")

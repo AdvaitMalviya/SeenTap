@@ -155,3 +155,38 @@ def test_a_file_with_no_header_falls_back_to_its_point_count(tmp_path):
         for i in range(7):
             log.write("calib_point", f=[0.0] * 9, target=[float(i), float(i)])
     assert run._load_calib(str(path))[3] == 7
+
+
+def test_the_newest_calibration_is_the_newest_by_clock_not_by_name(tmp_path,
+                                                                   monkeypatch):
+    """Sorting names put calib-9- ahead of calib-49-, because as text "9" beats
+    "4". A nine-point file from any time outranked every denser calibration
+    ever recorded, and two density comparisons were run against a stale one
+    without either new file being read."""
+    import os
+
+    from seentap import config, eventlog, run
+
+    monkeypatch.setattr(config, "LOG_DIR", str(tmp_path))
+
+    def write(name, points, when):
+        path = tmp_path / name
+        with eventlog.EventLog(path) as log:
+            log.write("calibration", density=points,
+                      features_version=config.FEATURES_VERSION)
+            for i in range(points):
+                log.write("calib_point", f=[0.0] * 9, target=[float(i), float(i)])
+        os.utime(path, (when, when))
+
+    write("calib-9-100.jsonl", 9, when=1000)
+    write("calib-49-200.jsonl", 49, when=2000)      # newer, but sorts earlier
+    write("calib-25-300.jsonl", 25, when=3000)      # newest of all
+
+    assert run._newest_calib().endswith("calib-25-300.jsonl")
+
+    order = [os.path.basename(p) for p in
+             run._by_age([str(tmp_path / n) for n in
+                          ("calib-25-300.jsonl", "calib-9-100.jsonl",
+                           "calib-49-200.jsonl")])]
+    assert order == ["calib-9-100.jsonl", "calib-49-200.jsonl",
+                     "calib-25-300.jsonl"]

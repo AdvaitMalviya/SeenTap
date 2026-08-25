@@ -112,10 +112,13 @@ Confirm the green dots sit on your irises and eye corners. MediaPipe has moved
 these indices between releases, and when they are wrong everything downstream
 fails in a way that looks like bad calibration.
 
-**2. Calibrate once.** More points is the one lever that reliably helps —
-`--density` takes 5, 9, 13, 25, 49 or 81, and the larger grids also walk in a
-serpentine so consecutive targets are neighbours rather than full-screen jumps.
-Twenty-five costs about a minute.
+**2. Calibrate once, and not at nine points.** More targets is the one lever
+that reliably helps. Measured on three real recordings scored against each
+other, leave-one-out error fell **183 → 93 → 69 px** going 9 → 25 → 49 points,
+and the honest cross-recording error fell 186 → 129 px. Nine is not enough.
+`--density` takes 5, 9, 13, 25, 49 or 81; the larger grids walk in a serpentine
+so consecutive targets are neighbours rather than full-screen jumps. Twenty-five
+costs about a minute.
 
  Follow the shrinking dot through nine targets, about
 twenty seconds. Sit still and actually look at each dot — it turns green only
@@ -123,7 +126,7 @@ once your eye has stopped moving, and a target you did not settle on is
 retried rather than recorded.
 
 ```bash
-python -m seentap.run calibrate --density 9
+python -m seentap.run calibrate --density 25
 python -m seentap.run fit
 ```
 
@@ -321,7 +324,7 @@ per-participant plots beside any p-value, no population-level claim.
 python -m pytest -q
 ```
 
-241 tests, none of which need a camera, a microphone or a display.
+247 tests, none of which need a camera, a microphone or a display.
 `tests/test_end_to_end.py` drives a synthetic participant through the whole
 pipeline — fusion, execution, logging, replay, the sweep and the CLI.
 `tests/test_requalify.py` drives a requalification through the same WebSocket
@@ -372,6 +375,10 @@ portrait and skips if you have not fetched one.
   `features()` computes and every saved file becomes unreadable — the vectors
   are already extracted, so old ones would be silent nonsense rather than a
   worse fit. `serve` and `fit` refuse them and say to record again.
+* **Ridge is the default mapping**, not the quadratic. Across six
+  cross-recording tests ridge won five, and the quadratic collapses when
+  targets are scarce — 311 px against ridge's 186 at nine points. It only
+  catches up once there are enough targets to constrain its extra terms.
 * Turning the depth reading into an angle assumes a **laptop at arm's length**
   — roughly a 300 mm screen at 600 mm, the `SCREEN_HALF_TAN` constant. It is
   the one piece of geometry the system cannot measure for itself, and it wants

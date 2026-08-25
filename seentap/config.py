@@ -68,6 +68,10 @@ DENSITIES = (5, 9, 13)    # the three the study compares
 # More points buy accuracy the only way that is available here: by averaging
 # down the per-visit noise. They cost about two seconds each.
 DENSITY_CHOICES = (5, 9, 13, 25, 49, 81)
+# Measured on three real recordings scored against each other: leave-one-out
+# fell 183 -> 93 -> 69 px going 9 -> 25 -> 49 points, and the honest
+# cross-recording error fell 186 -> 129. Nine points is not enough.
+RECOMMENDED_DENSITY = 25
 HELD_OUT_POINTS = 5
 STUDY1_REPETITIONS = 5
 
