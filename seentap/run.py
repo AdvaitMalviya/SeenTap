@@ -214,6 +214,101 @@ def cmd_calibrate(args) -> int:  # pragma: no cover - needs a camera
     return 0 if kept >= 4 else 1
 
 
+def cmd_check(args) -> int:  # pragma: no cover - needs a camera
+    """Look at the same targets again and measure where the mapping puts you.
+
+    `fit` scores the calibration against itself, which says only that the
+    mapping can reproduce points it was handed. This is the number that
+    matters: fresh fixations, the live pipeline, and the error broken into the
+    shape it actually has -- a constant offset means the head has moved since
+    calibrating, a scale error means the distance has, and scatter with no
+    pattern means the signal is not there.
+    """
+    import cv2
+
+    from seentap import gaze as G
+
+    path = args.calibration or _newest_calib()
+    F, XY = _require_calib(path)
+    mapping = calibrate.FITTERS[args.mapping](F, XY)
+    print(f"checking {path} with the {args.mapping} mapping")
+
+    w, h = config.SCREEN_W, config.SCREEN_H
+    scale = G.backing_scale()
+    win = "seentap check"
+    cv2.namedWindow(win, cv2.WINDOW_NORMAL | cv2.WINDOW_FREERATIO)
+    cv2.setWindowProperty(win, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    cv2.imshow(win, np.zeros((h * scale, w * scale, 3), np.uint8))
+    t_end = time.monotonic() + config.CALIB_WINDOW_SETTLE_S
+    while time.monotonic() < t_end:
+        cv2.imshow(win, np.zeros((h * scale, w * scale, 3), np.uint8))
+        cv2.waitKey(30)
+    rx, ry, rw, rh = G.view_rect(win, (0, 0, w, h))
+    canvas = np.zeros((rh * scale, rw * scale, 3), np.uint8)
+    tr = _tracker(mapping, f_ref=np.median(F, axis=0))
+    for row in eventlog.read(path):
+        if row.get("kind") == "blink_threshold":
+            tr.blink_ear = row["value"]
+
+    rows = []
+    try:
+        for fx, fy in calibrate.targets(args.density, 1.0, 1.0):
+            tx, ty = fx * rw, fy * rh
+            preds, t0, settled = [], time.monotonic(), None
+            while True:
+                now = time.monotonic()
+                canvas[:] = 0
+                cv2.circle(canvas, (int(tx * scale), int(ty * scale)),
+                           config.CALIB_DOT_PX * scale,
+                           (90, 230, 120) if settled else (60, 160, 255), -1)
+                # Draw where the mapping thinks you are, so the error is
+                # visible while it is measured rather than only afterwards.
+                if preds:
+                    px, py = preds[-1]
+                    cv2.circle(canvas, (int((px - rx) * scale), int((py - ry) * scale)),
+                               14 * scale, (80, 120, 250), 2)
+                cv2.imshow(win, canvas)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    return 1
+                s_, _f = tr.read(eventlog.now())
+                if s_ is None or s_.blink:
+                    continue
+                if settled is None:
+                    if now - t0 >= config.CALIB_SETTLE_MIN_S:
+                        settled = now
+                    preds.append((s_.x, s_.y))
+                    continue
+                preds.append((s_.x, s_.y))
+                if now - settled >= config.CALIB_COLLECT_S:
+                    break
+            keep = preds[-int(config.CALIB_COLLECT_S * 20):]
+            px = float(np.median([p[0] for p in keep]))
+            py = float(np.median([p[1] for p in keep]))
+            rows.append((rx + tx, ry + ty, px, py))
+            print(f"  target ({rx+tx:6.0f},{ry+ty:6.0f})  predicted "
+                  f"({px:7.0f},{py:6.0f})  off by "
+                  f"{np.hypot(px-rx-tx, py-ry-ty):6.0f} px")
+    finally:
+        tr.close()
+        cv2.destroyAllWindows()
+
+    a = np.array(rows)
+    d = a[:, 2:] - a[:, :2]
+    err = np.linalg.norm(d, axis=1)
+    print(f"\nmean error {err.mean():.0f} px  (dx {np.abs(d[:,0]).mean():.0f}, "
+          f"dy {np.abs(d[:,1]).mean():.0f})   gate is "
+          f"{config.GATE_FRAC*config.SCREEN_W:.0f} px")
+    print(f"constant offset: ({d[:,0].mean():+.0f}, {d[:,1].mean():+.0f}) px")
+    print(f"scatter about that offset: ({d[:,0].std():.0f}, {d[:,1].std():.0f}) px")
+    if np.linalg.norm(d.mean(axis=0)) > 1.5 * d.std(axis=0).mean():
+        print("  -> mostly a constant offset. The head has moved since "
+              "calibrating; say 'recalibrate' or press r to correct it.")
+    else:
+        print("  -> mostly scatter, not offset. Recalibrating will not fix "
+              "this; the eye signal itself is weak.")
+    return 0
+
+
 def _newest_calib():
     """The newest usable calibration, which is almost always the one meant.
 
@@ -570,6 +665,12 @@ def main(argv=None) -> int:
     s.add_argument("--aggregator", default="median")
     s.add_argument("--min-samples", type=int, default=5, dest="min_samples")
     s.set_defaults(fn=cmd_serve)
+
+    ck = sub.add_parser("check", help="measure real accuracy on fresh fixations")
+    ck.add_argument("--calibration", help="default: the newest usable one")
+    ck.add_argument("--density", type=int, default=9, choices=config.DENSITIES)
+    ck.add_argument("--mapping", default="poly", choices=list(calibrate.FITTERS))
+    ck.set_defaults(fn=cmd_check)
 
     mi = sub.add_parser("mic", help="list input devices and how loud they are")
     mi.add_argument("--seconds", type=float, default=1.5)

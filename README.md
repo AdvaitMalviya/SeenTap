@@ -144,7 +144,21 @@ Scored against a **held-out** recording only if you pass one as `--held`.
 Without it the numbers are fitted errors, not accuracy, and `fit` says so
 rather than quietly flattering itself.
 
-**3. Check the microphone.** Optional, but it answers "I said a command and
+**3. Measure what it is really worth.**
+
+```bash
+python -m seentap.run check
+```
+
+Look at the same nine targets again while the mapping predicts. `fit` scores a
+calibration against itself and only proves it can reproduce points it was
+handed; this uses fresh fixations and the live pipeline, draws its guess beside
+each target so you can watch the error as it happens, and then splits the error
+into the shape it has. A constant offset means your head has moved since
+calibrating and `recalibrate` will fix it. Scatter with no pattern means the
+signal is not there and recalibrating will not help.
+
+**4. Check the microphone.** Optional, but it answers "I said a command and
 nothing happened" in five seconds.
 
 ```bash
@@ -156,7 +170,7 @@ It measures every input device while you speak and names the loudest, and
 a Bluetooth headset in its headset profile measured 0.0 here where the built-in
 managed 462. Pass a specific one as `--mic` if you want to choose.
 
-**4. Run it.**
+**5. Run it.**
 
 ```bash
 python -m seentap.run serve                  # add --mic 3 if `mic` named one
@@ -217,7 +231,7 @@ gap because you steer it, but small targets in dense interfaces remain the hard
 case, and nothing here magnifies the screen or snaps to UI elements — both
 need permissions and frameworks the project does not carry.
 
-**5. Analyse.**
+**6. Analyse.**
 
 ```bash
 python -m seentap.run sweep logs/session-<timestamp>.jsonl --plot sweep.png
@@ -231,6 +245,7 @@ python -m seentap.run report logs/
 | `fetch` | Download model weights. Once, then fully offline. |
 | `landmarks` | Live overlay of the indices the pipeline depends on. |
 | `calibrate` | One calibration pass at 5, 9 or 13 points. |
+| `check` | Real accuracy on fresh fixations, split by error shape. |
 | `mic` | List input devices and how loud each one hears you. |
 | `fit` | Accuracy table across densities and mappings, plus the gate. |
 | `serve` | The live system and its dashboard. |
