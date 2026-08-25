@@ -285,11 +285,34 @@ def backing_scale() -> int:
         return 1
 
 
+def on_screen(rect, w: int = config.SCREEN_W, h: int = config.SCREEN_H,
+              frac: float = 0.9) -> bool:
+    """Is most of this rect somewhere the user can actually see it?
+
+    macOS slides a window into fullscreen from above, and mid-animation the
+    window server reports it still up there: measured, (0, -982, 1512, 982) on
+    a 1512x982 screen -- full size, entirely off the top. That cleared a check
+    on width and height alone, so calibration drew every dot above the menu
+    bar at a target the user had no way to look at. Two real sessions
+    calibrated into it and kept 5 of 9 points and 0 of 9.
+    """
+    x, y, rw, rh = rect
+    if rw <= 0 or rh <= 0:
+        return False
+    visible = (max(0, min(x + rw, w) - max(x, 0))
+               * max(0, min(y + rh, h) - max(y, 0)))
+    return visible >= frac * rw * rh
+
+
 def view_rect(window_name: str, fallback):
     """Where a window's content actually sits, in screen points.
 
     cv2.getWindowImageRect is no help: it echoes the image size back, reporting
     2400 wide for a 2400px canvas on a 1512px screen. The window server knows.
+
+    A rect that is off-screen is refused rather than returned: the caller's
+    fallback is the whole screen, which is wrong by the height of the menu bar,
+    where an off-screen rect is wrong by the height of the screen.
     """
     try:
         import os
@@ -305,7 +328,7 @@ def view_rect(window_name: str, fallback):
                 b = w["kCGWindowBounds"]
                 r = (round(b["X"]), round(b["Y"]),
                      round(b["Width"]), round(b["Height"]))
-                if r[2] >= 320 and r[3] >= 240:
+                if r[2] >= 320 and r[3] >= 240 and on_screen(r):
                     return r
     except Exception:
         pass

@@ -303,12 +303,27 @@ def targets(density: int, w: int = config.SCREEN_W, h: int = config.SCREEN_H,
 
 
 def _serpentine(density: int, lo: float, hi: float):
-    """A near-square grid of `density` points, walked without long jumps."""
+    """A near-square grid of exactly `density` points, walked without long jumps.
+
+    Rows times columns has to come to `density` itself. Deriving each of them
+    by rounding a square root did not: 25 laid out as 4x6 and 49 as 5x10, so
+    `--density 25` collected 24 points and `--density 49` collected 50 while
+    the log header went on recording the number that had been asked for. `fit`
+    keys its density column on that header, so two of the three rows in the
+    Study 1 table were labelled with a point count that was never collected.
+    Picking rows from the divisors of `density` keeps the layout near-square
+    and the count exact.
+    """
     if density < 4:
         raise ValueError(f"a mapping needs at least four targets, got {density}")
-    cols = int(round(math.sqrt(density * 1.54)))          # the screen is wider
-    rows = max(2, int(round(density / max(cols, 1))))
-    cols = max(2, int(round(density / rows)))
+    divisors = [r for r in range(2, density // 2 + 1) if density % r == 0]
+    if not divisors:
+        raise ValueError(
+            f"{density} points do not form a grid -- it has no factor pair. "
+            f"Pick one of {config.DENSITY_CHOICES}.")
+    # The screen is wider than it is tall, so aim for fewer rows than columns.
+    rows = min(divisors, key=lambda r: abs(r - math.sqrt(density / 1.54)))
+    cols = density // rows
     out = []
     for r in range(rows):
         xs = [lo + (hi - lo) * c / (cols - 1) for c in range(cols)]

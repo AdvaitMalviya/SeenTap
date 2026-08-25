@@ -390,6 +390,14 @@ def cmd_fit(args) -> int:
         # that survived: a nine-point run that lost four targets is a damaged
         # nine, and filing it under "5" invented a density that was never run.
         sessions[density] = (F, XY, path)
+        if len(F) != density:
+            # The header records the density that was asked for. It used to be
+            # able to disagree with what the grid actually laid out -- 25 came
+            # out as 4x6 and 49 as 5x10 -- so say so rather than printing a
+            # density column that names a point count nobody collected.
+            print(f"{path}: header says density {density} but holds {len(F)} "
+                  f"points; the density column below is the header's",
+                  file=sys.stderr)
     if skipped:
         print("skipped:\n  " + "\n  ".join(skipped), file=sys.stderr)
     if not sessions:

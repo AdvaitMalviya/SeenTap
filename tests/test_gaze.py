@@ -222,3 +222,20 @@ def test_view_rect_falls_back_when_the_window_is_not_there():
     """Headless, or any non-mac: the caller must still get usable geometry."""
     fallback = (0, 0, 1512, 982)
     assert gaze.view_rect("no such window at all", fallback) == fallback
+
+
+def test_a_window_still_animating_in_from_off_screen_is_refused():
+    """macOS slides a window into fullscreen from above, and mid-animation the
+    window server reported (0, -982, 1512, 982) -- full size, entirely off the
+    top of a 1512x982 screen. A check on width and height alone accepted it,
+    so calibration drew every dot above the menu bar. Two real sessions
+    calibrated into that rect and kept 5 of 9 points and 0 of 9."""
+    assert not gaze.on_screen((0, -982, 1512, 982), 1512, 982)
+    assert gaze.on_screen((0, 33, 1512, 949), 1512, 982)
+
+
+def test_a_window_half_off_the_edge_is_refused_too():
+    """The failure is not specific to the top: any rect the user can only
+    partly see puts targets where they cannot be looked at."""
+    assert not gaze.on_screen((-800, 33, 1512, 949), 1512, 982)
+    assert not gaze.on_screen((0, 0, 0, 0), 1512, 982)

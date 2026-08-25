@@ -155,3 +155,21 @@ def test_every_offered_density_stays_on_screen(density):
     pts = calibrate.targets(density, 1512, 982)
     assert len(pts) >= 4
     assert all(0 <= x <= 1512 and 0 <= y <= 982 for x, y in pts)
+
+
+@pytest.mark.parametrize("density", config.DENSITY_CHOICES)
+def test_every_offered_density_collects_the_number_of_points_it_names(density):
+    """Deriving rows and columns by rounding a square root did not multiply
+    back to the density: 25 laid out as 4x6 and 49 as 5x10, so `--density 25`
+    recorded 24 points and `--density 49` recorded 50. The log header keeps
+    writing the requested number and `fit` keys its density column on it, so
+    two of the three rows of the Study 1 table carried a point count that was
+    never collected -- and the two real dense recordings on disk still do."""
+    assert len(calibrate.targets(density, 1512, 982)) == density
+
+
+def test_a_density_with_no_factor_pair_is_refused_rather_than_rounded():
+    """Silently collecting a different number of points is what mislabelled the
+    density table; a prime says so instead."""
+    with pytest.raises(ValueError, match="factor pair"):
+        calibrate.targets(23, 1512, 982)
