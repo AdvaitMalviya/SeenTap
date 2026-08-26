@@ -31,6 +31,43 @@ def test_dashboard_html_exists_and_is_self_contained():
     assert "http://" not in html and "https://" not in html, "no external assets"
 
 
+def test_the_simulated_desktop_answers_every_verb_the_vocabulary_offers():
+    """A verb nothing on the page listens for is a verb that looks broken.
+
+    The dashboard used to draw a green ring and the verb's name wherever a
+    command landed and stop there, so `click` and `double click` were
+    indistinguishable on screen and neither one moved anything: the only two
+    words that visibly did something were `help` and `recalibrate`, which are
+    handled by the page rather than by the desktop. Adding a verb to VOCAB
+    without giving `fire` a branch would put it back in that state silently.
+    """
+    from seentap import server
+    body = server.INDEX.read_text().split("function fire(")[1].split("\n}\n")[0]
+    # `recalibrate` never reaches an executor -- the server intercepts it and
+    # runs the five-point correction instead.
+    for verb in config.VOCAB:
+        if verb != "recalibrate":
+            assert f'"{verb}"' in body, f"{verb} does nothing on the dashboard"
+
+
+def test_the_desktop_widgets_are_real_controls_not_drawings():
+    """Hit-testing, scrolling and button activation are the browser's job.
+
+    Drawn on the canvas they would each need writing by hand, and a demo of
+    hand-written click handling proves nothing about clicking.
+    """
+    html = _dashboard()
+    assert "elementFromPoint" in html, "the browser decides what gaze is on"
+    assert 'type="checkbox"' in html and "<button" in html
+    assert "scrollBy" in html
+    assert "pointer-events:none" in html, "the canvas must not block the widgets"
+
+
+def _dashboard() -> str:
+    from seentap import server
+    return server.INDEX.read_text()
+
+
 def test_a_mistyped_calibration_path_says_so_and_lists_what_there_is(tmp_path,
                                                                      capsys,
                                                                      monkeypatch):

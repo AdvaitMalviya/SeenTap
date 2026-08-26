@@ -26,8 +26,41 @@
   main{display:grid;grid-template-columns:1fr 320px;gap:14px;padding:14px;
        align-items:start}
   @media (max-width:900px){main{grid-template-columns:1fr}}
-  #desk{width:100%;aspect-ratio:1512/982;background:var(--panel);
-        border:1px solid var(--line);border-radius:8px;display:block}
+  /* The simulated desktop. Real DOM widgets rather than shapes drawn on the
+     canvas: a spoken verb is dispatched as a genuine mouse event at the gaze
+     point, so the browser does the hit-testing, the scrolling and the button
+     activation, and what the demo shows working is the thing itself rather
+     than a drawing of it reacting. The canvas stays on top, transparent and
+     click-through, and keeps its own job -- the tile grid, the gaze dot, and
+     the ring marking where a command landed. */
+  #stage{position:relative;width:100%;aspect-ratio:1512/982}
+  #app{position:absolute;inset:0;display:grid;gap:8px;padding:8px;
+       grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(3,1fr);
+       background:var(--panel);border:1px solid var(--line);border-radius:8px}
+  #desk{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  .w{position:relative;min-width:0;min-height:0;overflow:hidden;text-align:left;
+     display:flex;flex-direction:column;gap:4px;padding:8px;
+     background:#12161c;border:1px solid var(--line);border-radius:6px;
+     color:var(--fg);font:inherit}
+  .lbl{font-size:10px;letter-spacing:.06em;text-transform:uppercase;
+       color:var(--dim);font-weight:600}
+  .lbl i{font-style:normal;color:var(--accent);text-transform:none;letter-spacing:0}
+  .big{font-size:26px;line-height:1.1}
+  .rows{overflow-y:auto;flex:1;min-height:0}
+  .rows > div:not(.w){padding:5px 6px;border-bottom:1px solid var(--line);
+              white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .rows > div.pick{background:#1f2b3d;color:var(--accent)}
+  .sw{display:flex;align-items:center;gap:8px}
+  #wifi:has(:checked){border-color:var(--ok)}
+  .folder .open{display:none;color:var(--ok)}
+  .folder.open .open{display:block} .folder.open .shut{display:none}
+  .menu{display:none;position:absolute;left:8px;right:8px;bottom:8px;padding:6px;
+        background:#0b0f14;border:1px solid var(--accent);border-radius:6px;
+        color:var(--accent);font-size:12px}
+  .menu.show{display:block}
+  .chip{align-items:center;justify-content:center}
+  .chip.held{border-color:var(--warn);color:var(--warn);opacity:.7}
+  .bin{outline:1px dashed var(--line);outline-offset:-5px}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;
          padding:10px;margin-bottom:12px}
   .panel h2{margin:0 0 8px;font-size:12px;letter-spacing:.08em;
@@ -101,7 +134,47 @@
 </div>
 
 <main>
-  <canvas id="desk" width="1512" height="982"></canvas>
+  <div id="stage">
+    <div id="app">
+      <div class="w" style="grid-area:1/1/3/3">
+        <span class="lbl">Inbox <i>scroll up / scroll down</i></span>
+        <div class="rows" id="inbox"></div>
+      </div>
+
+      <button class="w" id="tap">
+        <span class="lbl">Button <i>click</i></span>
+        <span class="big" id="tap-n">0</span>
+        <span class="lbl">taps</span>
+      </button>
+
+      <label class="w" id="wifi">
+        <span class="lbl">Toggle <i>click</i></span>
+        <span class="sw"><input type="checkbox"><span>Wi-Fi</span></span>
+      </label>
+
+      <div class="w folder" id="folder">
+        <span class="lbl">Folder <i>double click</i></span>
+        <span class="big">&#128193;</span>
+        <span class="shut">Reports &mdash; closed</span>
+        <span class="open">q3.pdf &middot; notes.md</span>
+      </div>
+
+      <div class="w" id="menu-host">
+        <span class="lbl">File <i>right click</i></span>
+        <span class="big">&#128196;</span>
+        <div class="menu" id="menu">Rename &middot; Duplicate &middot; Delete</div>
+      </div>
+
+      <div class="w chip" id="chip-a">&#128196; report.pdf</div>
+      <div class="w chip" id="chip-b">&#128247; shot.png</div>
+
+      <div class="w bin" style="grid-area:3/3/4/5">
+        <span class="lbl">Drop here <i>drag &rarr; drop</i></span>
+        <div class="rows" id="bin"></div>
+      </div>
+    </div>
+    <canvas id="desk" width="1512" height="982"></canvas>
+  </div>
   <div>
     <div class="panel"><h2>Transcript</h2><ul id="transcript"></ul></div>
     <div class="panel"><h2>Actions</h2><ul id="actions"></ul></div>
@@ -133,14 +206,19 @@ function draw(){
   for (let r=0;r<rows;r++) for (let c=0;c<cols;c++){
     const z = r*cols+c, x=c*tw, y=r*th;
     const hot = gaze && gaze.zone === z;
-    ctx.fillStyle = hot ? "#1f2b3d" : "#12161c";
-    ctx.fillRect(x+4,y+4,tw-8,th-8);
-    ctx.strokeStyle = hot ? "#58a6ff" : "#272e38";
+    // Translucent, and only where gaze is: the widgets underneath are the
+    // thing being demonstrated, so the grid says which tile without hiding
+    // what is in it.
+    if (hot){
+      ctx.fillStyle = "rgba(88,166,255,.14)";
+      ctx.fillRect(x+4,y+4,tw-8,th-8);
+    }
+    ctx.strokeStyle = hot ? "#58a6ff" : "rgba(39,46,56,.75)";
     ctx.lineWidth = hot ? 3 : 1;
     ctx.strokeRect(x+4,y+4,tw-8,th-8);
-    ctx.fillStyle = hot ? "#58a6ff" : "#5b6673";
-    ctx.font = "600 34px ui-monospace,monospace";
-    ctx.fillText(String(z+1), x+18, y+46);
+    ctx.fillStyle = hot ? "#58a6ff" : "rgba(91,102,115,.55)";
+    ctx.font = "600 20px ui-monospace,monospace";
+    ctx.fillText(String(z+1), x+14, y+30);
   }
 
   ctx.strokeStyle = "rgba(88,166,255,.35)"; ctx.lineWidth = 2;
@@ -161,6 +239,84 @@ function draw(){
   requestAnimationFrame(draw);
 }
 requestAnimationFrame(draw);
+
+// --- the simulated desktop -------------------------------------------------
+// Ordinary widgets with ordinary listeners. They know nothing about gaze: a
+// verb arrives as a real mouse event at the gaze point and the browser does
+// the rest, so a button that lights up here is a button that would have lit
+// up anywhere. `serve --real` sends the same verbs to the OS instead.
+const stage = document.getElementById("stage");
+const menu = document.getElementById("menu");
+const inbox = document.getElementById("inbox");
+let held = null;                              // the chip a "drag" picked up
+let taps = 0;
+
+for (let i = 1; i <= 24; i++){
+  const row = document.createElement("div");
+  row.textContent = `${String(i).padStart(2, "0")}  message ${i}`;
+  inbox.append(row);
+}
+inbox.addEventListener("click", (e) => {
+  const row = e.target.closest("#inbox > div");
+  if (!row) return;
+  inbox.querySelectorAll(".pick").forEach((n) => n.classList.remove("pick"));
+  row.classList.add("pick");
+});
+document.getElementById("tap").addEventListener("click", () => {
+  document.getElementById("tap-n").textContent = ++taps;
+});
+document.getElementById("folder").addEventListener("dblclick", (e) =>
+  e.currentTarget.classList.toggle("open"));
+document.getElementById("menu-host").addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+  menu.classList.add("show");
+});
+
+function stagePoint(x, y){          // screen coordinates -> this page
+  const r = stage.getBoundingClientRect();
+  return [r.left + x / cfg.w * r.width, r.top + y / cfg.h * r.height];
+}
+
+function mouse(el, type, cx, cy, button){
+  el.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true,
+    view:window, clientX:cx, clientY:cy, button:button || 0}));
+}
+
+function scrollerAt(el){
+  for (; el && el !== stage; el = el.parentElement)
+    if (el.scrollHeight > el.clientHeight + 2) return el;
+  return null;
+}
+
+function fire(verb, x, y){
+  const [cx, cy] = stagePoint(x, y);
+  const el = document.elementFromPoint(cx, cy);
+  if (verb !== "right click") menu.classList.remove("show");
+  if (!el || !stage.contains(el)) return;     // gaze landed off the desktop
+  if (verb === "click" || verb === "select"){
+    mouse(el, "mousedown", cx, cy); mouse(el, "mouseup", cx, cy);
+    mouse(el, "click", cx, cy);
+  } else if (verb === "double click"){
+    // ponytail: the dblclick on its own. A real double click also fires two
+    // clicks, and sending those would do the single-click thing twice over --
+    // which is the one thing this widget exists to tell apart.
+    mouse(el, "dblclick", cx, cy);
+  } else if (verb === "right click"){
+    mouse(el, "contextmenu", cx, cy, 2);
+  } else if (verb === "scroll up" || verb === "scroll down"){
+    const s = scrollerAt(el);
+    if (s) s.scrollBy({top: verb === "scroll up" ? -120 : 120,
+                       behavior: "smooth"});
+  } else if (verb === "drag"){
+    held = el.closest(".chip");
+    if (held) held.classList.add("held");
+  } else if (verb === "drop" || verb === "cancel"){
+    if (held && verb === "drop" && el.closest(".bin"))
+      document.getElementById("bin").append(held);
+    if (held) held.classList.remove("held");
+    held = null;
+  }
+}
 
 let helpTimer = null;
 function showHelp(controls, seconds, words){
@@ -272,6 +428,10 @@ ws.onmessage = (ev) => {
   } else if (m.kind === "action"){
     if (m.ok){
       lastAction = m;
+      // Not under --real: there the OS click is already landing at these very
+      // screen coordinates, so if the browser happens to be under them the
+      // widget reacts once on its own. Dispatching as well would count it twice.
+      if (cfg.executor !== "RealExecutor") fire(m.verb, m.x, m.y);
       push("actions", `${m.verb} → tile ${m.zone+1}  (${m.n} samples)`, "done");
     } else {
       push("actions", `refused: ${m.reason}`, "refused");
