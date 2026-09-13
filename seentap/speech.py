@@ -52,8 +52,9 @@ class VadSegmenter:
     """Frame-by-frame voice activity, with hysteresis at both ends.
 
     Onset after 3 voiced frames so a cough does not arm the recogniser; offset
-    after 15 unvoiced frames (450 ms of hangover) so a pause in the middle of
-    'scroll ... down' does not truncate the command.
+    after 12 unvoiced frames (360 ms of hangover) so a pause in the middle of
+    'scroll ... down' does not truncate the command. That hangover is the floor
+    on end-to-end latency: every command waits it out before decoding starts.
     """
 
     def __init__(self, frame_ms: int = config.VAD_FRAME_MS,
@@ -101,6 +102,24 @@ class VadSegmenter:
         return seg
 
 
+def worth_decoding(frames, floor: float = config.MIC_QUIET_RMS) -> bool:
+    """Whether a segment carries speech, or is a blip webrtcvad armed on.
+
+    Aggressiveness 2 arms on room noise, and Whisper then spends seconds
+    deciding the segment is empty -- 4524 ms on one second of digital silence,
+    measured. This loop is serial, so that is seconds in which the microphone
+    goes unread and a command spoken into the gap is lost. 58 of 104 logged
+    utterances were such blips: a bare onset plus the hangover, with no loud
+    frame anywhere in them.
+
+    Peak rather than mean, because the hangover dilutes a short word away.
+    """
+    import numpy as np
+
+    return any(np.sqrt(np.mean(f.astype(np.float64) ** 2)) >= floor
+               for f in frames)
+
+
 def load_model(model: str = config.WHISPER_MODEL,
                compute_type: str = config.WHISPER_COMPUTE):
     """Local decoding only: no network round trip, no per-request cost, and
@@ -115,9 +134,34 @@ def transcribe(model, audio, vocab=None) -> str:
     """Greedy decode, with the command list nudging the decoder without
     constraining it."""
     prompt = ", ".join(vocab or config.VOCAB)
+    # vad_filter drops the non-speech either side before decoding. Without it
+    # Whisper loops on that silence: 3.3 s to return '' on one second of it,
+    # 6.3 s on room hiss, and 5-7 s on real one-word commands padded by the
+    # 200 ms preroll and the hangover. With it, 2-3 ms. Twelve of 52 logged
+    # decodes ran over a second and this is what they were spending it on.
+    #
+    # Capping max_new_tokens looks like the same fix and is not: it truncates
+    # the loop but still returns it, so silence decodes to 'click, click,
+    # click...' and a phantom command fires, and a truncated 'double click,
+    # double click, ...' parses as plain 'click' -- a wrong action, which this
+    # vocabulary is built never to produce.
     segments, _ = model.transcribe(
         audio, beam_size=1, condition_on_previous_text=False,
-        initial_prompt=prompt, language="en")
+        initial_prompt=prompt, language="en", vad_filter=True, temperature=0)
+
+    # temperature=0 is one decode pass. The default is six -- [0.0 .. 1.0],
+    # retried whenever the result looks repetitive (compression ratio > 2.4) or
+    # unlikely (logprob < -1.0). Real commands hit that: 10 of 42 spoken
+    # utterances in one session ran over a second, to 8.1 s, and the ones that
+    # showed their working came back as 'drop, drop, drop, drop, drop, dr'. A
+    # retry cannot help here -- a verb outside the vocabulary is refused either
+    # way, so the safe outcome is reached faster by not paying for five more.
+    #
+    # This bounds the retries, not the loop inside a single pass, which can
+    # still run to 448 tokens -- nine such loops cost ~935 ms each in one
+    # session and were all refused, which is the safe outcome at a tolerable
+    # price. Capping max_new_tokens is not the next lever for it, for the
+    # reason above; repetition_penalty is.
     return " ".join(s.text for s in segments).strip()
 
 
@@ -222,8 +266,10 @@ def _speech_worker(out_queue, stop_event, device=None) -> None:  # pragma: no co
                 current = list(ring)          # pre-roll keeps the first consonant
             if done is None:
                 continue
-            audio = np.concatenate(current).astype(np.float32) / 32768.0
-            current = []
+            frames, current = current, []
+            if not worth_decoding(frames):
+                continue
+            audio = np.concatenate(frames).astype(np.float32) / 32768.0
             t0 = time.monotonic()
             text = transcribe(model, audio)
             out_queue.put(Utterance(onset_t=done.onset_t, offset_t=done.offset_t,

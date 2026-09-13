@@ -195,3 +195,31 @@ def test_gate_refusals_are_counted_so_the_claim_is_a_number():
     r = f.on_utterance(onset_t=100.0, text="click", now=100.0)   # no gaze at all
     assert not r.ok
     assert f.gate_refusals == 1
+
+
+def test_the_gate_is_read_at_speech_onset_not_at_transcript_arrival():
+    """Decoding lagged 0.83-9.10 s in the logged sessions. Gating on 'now' asks
+    whether the eyes are steady seconds after the user spoke, by which time
+    they have looked away -- it refused 11 correctly transcribed commands as
+    'off_screen' and 3 more as 'not_fixating', and not one of the 104 logged
+    utterances ever reached the executor."""
+    f = fusion.Fusion(CFG)
+    for s in held(700.0, 500.0, 30, t0=100.0):          # fixating while speaking
+        f.on_gaze(s)
+    for s in held(-400.0, 500.0, 121, t0=101.0):        # then away, for 4 s
+        f.on_gaze(s)
+    r = f.on_utterance(onset_t=100.9, text="click", now=105.0)
+    assert r.ok, r.reason
+    assert r.x == pytest.approx(700.0)
+
+
+def test_the_gate_admits_a_fixation_that_jitters_like_the_real_estimator():
+    """Dispersion of a 200 ms window ran p25 93, p50 139, p75 215 px across a
+    347 s session, so a 120 px gate stood open 40% of the time and refused 18
+    of 43 correctly transcribed commands as 'not_fixating'. The eye was as
+    steady as this estimator gets; the threshold sat under the median."""
+    buf = buffer([(700 + d, 500 - d) for d in (0, 40, -35, 60, -55, 70, -60)],
+                 t0=100.0)
+    assert fusion.dispersion(buf) == pytest.approx(130.0)
+    ok, reason = fusion.gate(buf, 100.2)
+    assert ok, reason

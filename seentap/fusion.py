@@ -212,7 +212,12 @@ class Fusion:
         if not self._cooled(now):
             return CommandResult(ok=False, reason="cooldown", onset_t=onset_t)
 
-        ok, why = gate(self.buffer, now, screen=self.screen)
+        # At speech onset, not at ``now``. Decoding took 0.83-9.10 s across
+        # the logged sessions, so asking whether the eyes are steady now asks
+        # about a moment seconds after the user spoke and looked away -- which
+        # refused 11 correctly transcribed commands as 'off_screen' and 3 more
+        # as 'not_fixating'. bind() looks backwards; the gate goes with it.
+        ok, why = gate(self.buffer, onset_t, screen=self.screen)
         if not ok:
             self.gate_refusals += 1
             self._to("tracking", now)

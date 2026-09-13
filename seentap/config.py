@@ -116,7 +116,13 @@ RECOVERABLE_PX = 15.0
 
 # --- gaze gating -----------------------------------------------------------
 GATE_WINDOW_MS = 200      # dispersion is measured over this much history
-GATE_DISPERSION_PX = 120  # above this the eyes are sweeping, not fixating
+# Above this the eyes are sweeping, not fixating. 120 was below the median:
+# across a 347 s session the dispersion of a 200 ms window ran p25 93, p50 139,
+# p75 215 px, so the gate stood open only 40% of the time and refused 18 of 43
+# correctly transcribed commands as 'not_fixating' -- the ordinary state of a
+# steady eye, not a sweep. At 200 it is open 72% of the time and still refuses
+# the top quartile; a full-screen saccade is 1088 px and never comes close.
+GATE_DISPERSION_PX = 200
 
 # --- drift and requalification ---------------------------------------------
 # Degrees of head rotation away from the calibration pose. Pixels would be
@@ -145,7 +151,13 @@ REQUALIFY_COLLECT_MS = 900
 SAMPLE_RATE = 16000
 VAD_FRAME_MS = 30
 VAD_ONSET_FRAMES = 3      # 90 ms of voice declares onset
-VAD_OFFSET_FRAMES = 15    # 450 ms of silence declares offset
+# 360 ms of silence declares offset. This is the hard floor on how soon a
+# command can be acted on -- it is spent waiting to be sure you have stopped
+# talking, and no amount of faster decoding gets it back.
+# Twelve frames clears the 300 ms mid-command pause by two. Any shorter and
+# 'scroll ... down' splits in two, so going lower means closing the utterance
+# on a vocabulary match rather than on silence.
+VAD_OFFSET_FRAMES = 12
 VAD_PREROLL_MS = 200      # so the first consonant survives
 VAD_AGGRESSIVENESS = 2
 # Peak RMS below this and the microphone is not usefully hearing you. A
@@ -193,7 +205,11 @@ LEAD_MS_SWEEP = (0, 100, 200, 300)
 WINDOW_MS_SWEEP = (100, 300, 500, 1000)
 AGGREGATOR_SWEEP = ("last", "mean", "median", "centroid", "zone_mode")
 MIN_SAMPLES_SWEEP = (3, 5, 8)
-BUFFER_SECONDS = 3.0
+# Must outlast the slowest decode, because both the gate and the binding read
+# the buffer at speech onset while the transcript arrives seconds later. Worst
+# observed lag was 9.1 s; at 3.0 the onset samples were evicted before anything
+# could be bound to them.
+BUFFER_SECONDS = 12.0
 
 # --- the on-screen gaze cursor ---------------------------------------------
 # Feedback is not decoration here. A webcam gaze estimate carries a standing

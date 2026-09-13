@@ -36,10 +36,10 @@ def test_preroll_is_subtracted_from_the_reported_segment_start():
     assert segs[0].audio_start_t == pytest.approx(segs[0].onset_t - 0.200)
 
 
-def test_offset_needs_fifteen_unvoiced_frames():
+def test_offset_needs_twelve_unvoiced_frames():
     seg = speech.VadSegmenter()
-    assert not feed(seg, "v" * 10 + "." * 14)
-    assert feed(seg, ".", t0=24 * 0.03)
+    assert not feed(seg, "v" * 10 + "." * 11)
+    assert feed(seg, ".", t0=21 * 0.03)
 
 
 def test_a_pause_mid_command_does_not_split_the_utterance():
@@ -55,11 +55,46 @@ def test_segment_carries_onset_and_offset():
     assert segs[0].offset_t > segs[0].onset_t
 
 
-def test_segmenter_matches_the_reported_hangover():
+def test_the_hangover_still_clears_a_mid_command_pause():
+    """It is the floor on latency, so it is kept as short as the pause in
+    'scroll ... down' allows -- 360 ms against the 300 ms that pause runs to."""
     seg = speech.VadSegmenter()
-    assert seg.offset_frames * seg.frame_ms == 450
+    assert seg.offset_frames * seg.frame_ms == 360 > 300
 
 
 def test_defaults_match_the_report():
     seg = speech.VadSegmenter()
-    assert (seg.frame_ms, seg.onset_frames, seg.offset_frames, seg.preroll_ms) == (30, 3, 15, 200)
+    assert (seg.frame_ms, seg.onset_frames, seg.offset_frames, seg.preroll_ms) == (30, 3, 12, 200)
+
+
+def test_a_noise_blip_is_never_handed_to_whisper():
+    """58 of 104 logged utterances transcribed to nothing: webrtcvad armed on
+    room noise and Whisper spent seconds deciding so (4524 ms on one second of
+    digital silence, measured). The worker is a serial loop, so every one of
+    those was seconds with the microphone unread."""
+    import numpy as np
+
+    quiet = [np.zeros(480, dtype=np.int16) for _ in range(20)]
+    assert not speech.worth_decoding(quiet)
+
+    spoken = list(quiet)
+    spoken[5] = np.random.default_rng(0).normal(0, 400, 480).astype(np.int16)
+    assert speech.worth_decoding(spoken), "a single loud frame is a word"
+
+
+def test_whisper_is_told_to_drop_the_silence_it_would_otherwise_loop_on():
+    """Decoding one second of silence took 3.3 s and room hiss 6.3 s, because
+    Whisper loops on non-speech; real one-word commands padded by the 200 ms
+    preroll and hangover cost 5-7 s the same way. With vad_filter it is
+    2-3 ms. Capping max_new_tokens instead truncates the loop but still returns
+    it, firing a phantom command from silence."""
+    seen = {}
+
+    class FakeModel:
+        def transcribe(self, audio, **kw):
+            seen.update(kw)
+            return [], None
+
+    assert speech.transcribe(FakeModel(), [0.0]) == ""
+    assert seen["vad_filter"] is True
+    assert seen["temperature"] == 0, "six temperature retries, on audio a retry cannot rescue"
