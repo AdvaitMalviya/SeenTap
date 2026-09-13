@@ -29,6 +29,12 @@ and skips the fixation requirement too, since someone who has forgotten the
 commands is looking around the screen, which is exactly the state the normal
 gate refuses.
 
+**A command lands in about a second.** Measured from the moment you start
+speaking: a median of 1.00 s, 1.18 s at the 90th percentile, 1.22 s at worst
+across the 22 commands that fired in one session. Most of it is unavoidable —
+the word itself, then 360 ms of silence to be sure you have finished saying it,
+which is the floor on the whole figure. Decoding is 240 ms of it.
+
 **Two modes.** A free cursor driven by filtered gaze, or a 4×3 grid of large
 tiles where gaze picks the tile and voice confirms. A tile dwarfs the tracker's
 error, so the grid stays usable even at the pessimistic end of webcam accuracy.
@@ -38,6 +44,13 @@ where the eyes are *now*. Transcription costs a few hundred milliseconds and
 the user has usually moved on, so binding to the current position acts on the
 wrong target — intermittently, which is the hardest kind of bug to catch after
 the fact. Commands bind to the gaze held at speech onset instead.
+
+The gate is read there too, and for a while it was not. Asking whether the eyes
+are steady *now* asks about a moment up to nine seconds after the command was
+spoken, by which time they have moved on for the same reason the binding looks
+back — it refused eleven correctly transcribed commands as `off_screen` and
+three more as `not_fixating`. The buffer holds twelve seconds so that onset is
+still reachable when a slow transcript finally lands.
 
 **Drift is visible and cheap to undo.** A calibration is fitted at one head
 pose and decays as the user settles into their chair — the likeliest way a
@@ -62,6 +75,14 @@ it can actually defend.
 screen, and the eyes are actually fixating, so someone else in the room saying
 "click" does nothing. And a transcript that does not clear the match threshold
 produces no action rather than the wrong one.
+
+"Fixating" is a measured threshold rather than a chosen one, and the first
+choice was wrong. Dispersion over a 200 ms window runs p25 93, p50 139, p75
+215 px in ordinary use, so the original 120 px left the gate shut more often
+than open and rejected the resting state of a steady eye — the estimator's own
+jitter, not a sweep. At 200 px it is open about 72% of the time and still
+refuses the top quartile; a full-screen saccade is 1088 px and never comes
+close.
 
 Two verbs are exempt from the fixation half of that, on purpose. "help" and
 "recalibrate" name no target, and both are asked for from states the gate
@@ -120,21 +141,22 @@ and the honest cross-recording error fell 186 → 129 px. Nine is not enough.
 so consecutive targets are neighbours rather than full-screen jumps. Twenty-five
 costs about a minute.
 
- Follow the shrinking dot through nine targets, about
-twenty seconds. Sit still and actually look at each dot — it turns green only
-once your eye has stopped moving, and a target you did not settle on is
-retried rather than recorded.
+Follow the shrinking dot through the targets — about twenty seconds at nine
+points, a minute at twenty-five. Sit still and actually look at each dot — it
+turns green only once your eye has stopped moving, and a target you did not
+settle on is retried rather than recorded.
 
 ```bash
 python -m seentap.run calibrate --density 25
 python -m seentap.run fit
 ```
 
-`calibrate` writes `logs/calib-9-<timestamp>.jsonl` — the feature vectors, the
-target coordinates, and your measured blink threshold. That last one is
-measured rather than assumed because eye shape varies enough between people
-that a fixed constant misfires at both ends, and calibration already holds your
-eyes open on a target for a second, so the samples are there for free.
+`calibrate` writes `logs/calib-<density>-<timestamp>.jsonl` — the feature
+vectors, the target coordinates, and your measured blink threshold. That last
+one is measured rather than assumed because eye shape varies enough between
+people that a fixed constant misfires at both ends, and calibration already
+holds your eyes open on a target for a second, so the samples are there for
+free.
 
 **This file is reused; you do not recalibrate every session.** Mid-session
 drift is handled by requalification instead, which corrects the mapping in
@@ -158,7 +180,7 @@ rather than quietly flattering itself.
 python -m seentap.run check
 ```
 
-Look at the same nine targets again while the mapping predicts. `fit` scores a
+Look at a fresh grid of targets while the mapping predicts. `fit` scores a
 calibration against itself and only proves it can reproduce points it was
 handed; this uses fresh fixations and the live pipeline, draws its guess beside
 each target so you can watch the error as it happens, and then splits the error
@@ -252,7 +274,7 @@ python -m seentap.run report logs/
 | --- | --- |
 | `fetch` | Download model weights. Once, then fully offline. |
 | `landmarks` | Live overlay of the indices the pipeline depends on. |
-| `calibrate` | One calibration pass at 5, 9 or 13 points. |
+| `calibrate` | One calibration pass at 5, 9, 13, 25, 49 or 81 points. |
 | `check` | Real accuracy on fresh fixations, split by error shape. |
 | `mic` | List input devices and how loud each one hears you. |
 | `fit` | Accuracy table across densities and mappings, plus the gate. |
@@ -284,6 +306,16 @@ Landmark inference and speech decoding are both CPU-bound and will fight if
 left in one thread; the visible symptom is the cursor stuttering at the exact
 moment a command is spoken. Speech therefore runs in its own process behind a
 bounded queue, and the recogniser stays idle until voice activity is detected.
+
+That process is a serial loop — capture, segment, decode, repeat — so every
+millisecond spent decoding is a millisecond the microphone is not being read,
+and anything said into the gap is lost rather than delayed. Two guards keep it
+short. A segment with no loud frame anywhere in it never reaches the recogniser
+at all, which is most of what voice activity detection arms on: 58 of 104
+utterances in one set of sessions were a bare onset plus the hangover and
+nothing else. What does reach it has the silence either side trimmed first,
+because Whisper otherwise loops on non-speech — 3.3 s to return nothing on a
+second of silence, 6.3 s on room hiss, against 2-3 ms with the trimming on.
 
 Three invariants hold the whole thing together:
 
@@ -324,7 +356,7 @@ per-participant plots beside any p-value, no population-level claim.
 python -m pytest -q
 ```
 
-247 tests, none of which need a camera, a microphone or a display.
+267 tests, none of which need a camera, a microphone or a display.
 `tests/test_end_to_end.py` drives a synthetic participant through the whole
 pipeline — fusion, execution, logging, replay, the sweep and the CLI.
 `tests/test_requalify.py` drives a requalification through the same WebSocket
@@ -379,6 +411,17 @@ portrait and skips if you have not fetched one.
   cross-recording tests ridge won five, and the quadratic collapses when
   targets are scarce — 311 px against ridge's 186 at nine points. It only
   catches up once there are enough targets to constrain its extra terms.
+* Speech is decoded in **one pass, not six**. The decoder re-runs itself at
+  rising temperatures whenever the output looks repetitive, and real one-word
+  commands trigger it: ten of 42 utterances in one session ran over a second,
+  to 8.1 s, the slow ones coming back as `drop, drop, drop, drop, drop, dr`. A
+  retry cannot rescue those — a verb outside the vocabulary is refused either
+  way — so the refusal now arrives five passes sooner. The loop inside a single
+  pass remains, at about 935 ms each and still refused; `repetition_penalty` is
+  the lever if it ever matters. Capping the token count is not: a truncated
+  `double click, double click, ...` parses as plain `click`, which is a wrong
+  action rather than a refusal, and silence truncates to `click, click,
+  click...` and fires one out of nothing.
 * Turning the depth reading into an angle assumes a **laptop at arm's length**
   — roughly a 300 mm screen at 600 mm, the `SCREEN_HALF_TAN` constant. It is
   the one piece of geometry the system cannot measure for itself, and it wants
