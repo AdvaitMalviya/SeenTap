@@ -213,21 +213,32 @@ def pose_drift(f: np.ndarray, f_ref: np.ndarray) -> float:
 
 
 class OneEuro:
-    """Adaptive low-pass, 2D.
+    """Low-pass, 2D, that snaps on a saccade.
 
-    Preferred over a fixed-gain Kalman because the cutoff rises with velocity:
-    heavy smoothing while the eye is fixating, almost none during a saccade.
+    The One Euro idea is a cutoff that rises with velocity: heavy smoothing
+    while the eye is fixating, almost none during a saccade. That works when a
+    saccade is fast against the noise, and here it is not: a frame of landmark
+    jitter moves the mapped point as far as a small saccade does, so velocity
+    cannot separate the two and ``beta`` defaults to zero. What does separate
+    them is persistence. Noise scatters around the smoothed point; a saccade
+    leaves every subsequent sample on the far side of it. When the last
+    ``snap_frames`` samples all sit further than ``snap_px`` away, the point is
+    reset onto their median rather than dragged there over a second.
     """
 
     def __init__(self, min_cutoff: float = config.ONE_EURO_MIN_CUTOFF,
-                 beta: float = config.ONE_EURO_BETA, d_cutoff: float = 1.0):
+                 beta: float = config.ONE_EURO_BETA, d_cutoff: float = 1.0,
+                 snap_px: float = config.SNAP_PX,
+                 snap_frames: int = config.SNAP_FRAMES):
         self.min_cutoff, self.beta, self.d_cutoff = min_cutoff, beta, d_cutoff
+        self.snap_px, self.snap_frames = snap_px, snap_frames
         self.reset()
 
     def reset(self) -> None:
         self._t = None
         self._x = None
         self._dx = np.zeros(2)
+        self._recent = deque(maxlen=self.snap_frames)
 
     @staticmethod
     def _alpha(cutoff: float, dt: float) -> float:
@@ -239,6 +250,14 @@ class OneEuro:
         if self._t is None:
             self._t, self._x = t, p
             return float(p[0]), float(p[1])
+        self._recent.append(p)
+        if (len(self._recent) == self.snap_frames
+                and all(np.linalg.norm(q - self._x) > self.snap_px
+                        for q in self._recent)):
+            self._x = np.median(np.asarray(self._recent), axis=0)
+            self._dx = np.zeros(2)
+            self._t = t
+            return float(self._x[0]), float(self._x[1])
         dt = max(t - self._t, 1e-6)
         dx = (p - self._x) / dt
         a_d = self._alpha(self.d_cutoff, dt)

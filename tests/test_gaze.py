@@ -119,6 +119,26 @@ def test_filter_still_follows_a_saccade():
     assert x > 0.9 * 900.0, "should reach 90% of a step within ~0.5 s"
 
 
+def test_one_wild_frame_barely_moves_the_dot_but_a_held_move_snaps():
+    """The estimator's noise is as large as a small saccade, so a single far
+    sample must be treated as noise; the same sample repeated is the eye."""
+    f = gaze.OneEuro(snap_px=250, snap_frames=2)
+    for i in range(30):
+        f(500.0, 400.0, i / 30.0)
+    x, y = f(1200.0, 900.0, 1.0)
+    assert abs(x - 500.0) < 0.15 * 700, "one outlier is smoothed, not followed"
+    x, y = f(1200.0, 900.0, 1.0 + 1 / 30)
+    assert (x, y) == pytest.approx((1200.0, 900.0)), "held for two frames: snap"
+
+
+def test_a_move_under_the_snap_distance_is_smoothed_not_snapped():
+    f = gaze.OneEuro(snap_px=250, snap_frames=2)
+    for i in range(30):
+        f(500.0, 400.0, i / 30.0)
+    xs = [f(650.0, 400.0, 1.0 + i / 30)[0] for i in range(3)]
+    assert 500.0 < xs[-1] < 650.0 and xs == sorted(xs), "glides toward it"
+
+
 def test_filter_reset_clears_history():
     f = gaze.OneEuro()
     f(0.0, 0.0, 0.0)

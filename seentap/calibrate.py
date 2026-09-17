@@ -14,7 +14,15 @@ from sklearn.preprocessing import PolynomialFeatures, StandardScaler
 
 from seentap import config
 
-ALPHAS = (1e-6, 1e-4, 1e-2, 1.0, 10.0, 100.0)
+# Nothing below 1.0. Leave-one-out on the condensed points is blind to
+# per-frame noise, and it rewarded penalties small enough to fit the two eyes'
+# vertical ratios with opposite signs: at 0.01 one frame of landmark jitter
+# moved the estimate 187 px vertically, at 1.0 the same jitter moved it 60.
+# Cross-recording error went the same way, 521 -> 242 px on the worst pair.
+# The columns are standardised, so 1.0 leaves every direction the calibration
+# actually exercised alone and shrinks only the near-collinear ones, which is
+# where the noise lives.
+ALPHAS = (1.0, 10.0, 100.0)
 
 
 def useful_columns(F: np.ndarray) -> list[int]:

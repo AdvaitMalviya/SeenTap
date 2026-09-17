@@ -411,6 +411,31 @@ portrait and skips if you have not fetched one.
   cross-recording tests ridge won five, and the quadratic collapses when
   targets are scarce — 311 px against ridge's 186 at nine points. It only
   catches up once there are enough targets to constrain its extra terms.
+* The cursor is **smoothed hard and snaps on a saccade**, rather than
+  following a velocity-adaptive filter. The estimate is noisy in a way no fit
+  removes: the iris travels about five pixels of a 1080p frame for the whole
+  height of the screen, so half a pixel of landmark jitter is a hundred pixels
+  on screen. Measured live, the mapped point moved a median 70 px between
+  consecutive frames — 62 px of noise horizontally, 124 vertically, and the
+  vertical noise of the two eyes 97% correlated, so averaging across them
+  cannot cancel it. The One Euro velocity term is meant to open the filter
+  during a saccade, but at that noise level a still eye already reads as
+  thousands of px/s and the filter stood open, passing two thirds of the
+  jitter through. Now a 0.5 Hz low-pass holds while the eye is still, and a
+  displacement that persists — every one of the last two raw samples more
+  than 250 px from the smoothed point — is taken as the eye having moved and
+  the point is reset onto them. Noise does not hold one side for two frames
+  at two sigma; a tile change does. Replayed on the same frames the
+  per-frame movement fell from 42 px to 12 and saccades still landed in
+  about 280 ms. Moves under the snap distance are followed at the cutoff.
+* The ridge penalty is **never below 1.0**. Leave-one-out on the condensed
+  calibration points is blind to per-frame noise, and it rewarded penalties
+  small enough to fit the two eyes' vertical ratios with opposite signs: at
+  0.01 a frame of jitter moved the estimate 187 px vertically, at 1.0 the same
+  jitter moved it 60, and the cross-recording error on the worst pair went
+  521 → 242 px the same way. The columns are standardised, so 1.0 leaves every
+  direction the calibration exercised alone and shrinks only the near-collinear
+  ones, which is where the noise lives.
 * Speech is decoded in **one pass, not six**. The decoder re-runs itself at
   rising temperatures whenever the output looks repetitive, and real one-word
   commands trigger it: ten of 42 utterances in one session ran over a second,

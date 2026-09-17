@@ -83,8 +83,33 @@ BLINK_EAR = 0.12
 BLINK_HOLD_MS = 500       # freeze the last valid point, then flag low confidence
 DEADZONE_PX = 15          # cursor mode only; kills micro-drift
 CONF_FLOOR = 0.5
-ONE_EURO_MIN_CUTOFF = 1.0
-ONE_EURO_BETA = 0.007
+
+# --- smoothing -------------------------------------------------------------
+# The estimate is noisy in a way no fit removes: the whole vertical travel of
+# the iris across the screen is about five pixels of a 1080p frame, so half a
+# pixel of landmark jitter is a hundred pixels on screen. Measured on 450 live
+# frames the mapped point moved a median 70 px between consecutive frames, 62
+# px of noise per frame horizontally and 124 vertically, and the vertical noise
+# of the two eyes was 97% correlated, so it cannot be averaged out across them
+# either. Only time averages it.
+#
+# A plain low-pass at this cutoff while the eye is still. 0.5 Hz is a 0.3 s
+# time constant, which leaves about a fifth of the per-frame noise standing.
+ONE_EURO_MIN_CUTOFF = 0.5
+# Zero. The One Euro velocity term is meant to open the filter during a
+# saccade, but it is fed the raw frame-to-frame velocity, and here that is
+# thousands of px/s on a motionless eye. At the old 0.007 the filter stood
+# open nearly all the time and passed two thirds of the noise through; any
+# non-zero value the data supported cost more jitter than lag it saved.
+ONE_EURO_BETA = 0.0
+# So a saccade is detected the other way: as a displacement that persists.
+# When every one of the last SNAP_FRAMES raw samples sits further than SNAP_PX
+# from the smoothed point, the eye has moved and the point is reset onto them.
+# Noise does not hold one side for two frames at 2 sigma; a tile change (327
+# px at the closest) does. Moves smaller than this are followed at the cutoff
+# above instead of snapped.
+SNAP_PX = 250
+SNAP_FRAMES = 2
 
 # --- which features earn their place ---------------------------------------
 # How far each feature drifts between sessions when the user simply sits down
@@ -122,6 +147,9 @@ GATE_WINDOW_MS = 200      # dispersion is measured over this much history
 # correctly transcribed commands as 'not_fixating' -- the ordinary state of a
 # steady eye, not a sweep. At 200 it is open 72% of the time and still refuses
 # the top quartile; a full-screen saccade is 1088 px and never comes close.
+# Those percentiles were measured before the smoothing below was fixed. With
+# it, the same window runs p50 30, p75 50 px and the gate stands open 91% of
+# the time, so 200 now refuses only a genuine sweep.
 GATE_DISPERSION_PX = 200
 
 # --- drift and requalification ---------------------------------------------
